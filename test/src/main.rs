@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("noxbot=debug".parse().unwrap())
-                .add_directive("nox_relay=debug".parse().unwrap())
+                .add_directive("noxrelay=info".parse().unwrap())
                 .add_directive("nox_api=debug".parse().unwrap()),
         )
         .init();
