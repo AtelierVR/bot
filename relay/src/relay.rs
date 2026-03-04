@@ -91,8 +91,15 @@ impl NoxRelay {
         }
         
         let mut received_count = 0u64;
+        let mut loop_count = 0u64;
         
         loop {
+            loop_count += 1;
+            
+            if loop_count % 50 == 1 {
+                debug!("Datagram listener cycle {} (received: {})", loop_count, received_count);
+            }
+            
             if !self.running.load(Ordering::SeqCst) {
                 info!("Datagram listener stopping: relay not running (received {} total)", received_count);
                 break;
@@ -115,7 +122,7 @@ impl NoxRelay {
             match tokio::time::timeout(Duration::from_millis(100), quic.recv_datagram()).await {
                 Ok(Ok(data)) => {
                     received_count += 1;
-                    debug!("Datagram received: {} bytes (total: {})", data.len(), received_count);
+                    info!("📨 Datagram received: {} bytes (total: {})", data.len(), received_count);
                     drop(connector); // Release lock before processing
                     if let Err(e) = self.process_datagram(&data).await {
                         warn!("Failed to process datagram: {}", e);
