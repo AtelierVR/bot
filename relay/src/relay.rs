@@ -97,7 +97,7 @@ impl NoxRelay {
             loop_count += 1;
             
             if loop_count % 50 == 1 {
-                debug!("Datagram listener cycle {} (received: {})", loop_count, received_count);
+                info!("🔄 Datagram listener cycle {} (received: {})", loop_count, received_count);
             }
             
             if !self.running.load(Ordering::SeqCst) {
@@ -106,12 +106,18 @@ impl NoxRelay {
             }
 
             // Get QUIC connector
+            debug!("Acquiring connector read lock...");
             let connector = self.connector.read().await;
+            debug!("Connector lock acquired");
+            
             let quic = match connector
                 .as_any()
                 .downcast_ref::<crate::connector::QuicConnector>()
             {
-                Some(q) => q,
+                Some(q) => {
+                    debug!("QuicConnector downcast successful");
+                    q
+                },
                 None => {
                     warn!("Datagram listener: connector is not QUIC, stopping");
                     break;
@@ -119,6 +125,7 @@ impl NoxRelay {
             };
 
             // Receive a datagram (blocks until one arrives or timeout)
+            debug!("Calling recv_datagram with 100ms timeout...");
             match tokio::time::timeout(Duration::from_millis(100), quic.recv_datagram()).await {
                 Ok(Ok(data)) => {
                     received_count += 1;
