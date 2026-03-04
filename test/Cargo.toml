@@ -1,12 +1,12 @@
 [package]
-name = "nox-test"
+name = "noxbot"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "nox-test"
+name = "noxbot"
 path = "src/main.rs"
 
 [dependencies]

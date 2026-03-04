@@ -32,18 +32,18 @@ cargo build --release
 
 ```bash
 # Using cargo
-cargo run --release --bin nox-test -- --count 10 --movement circular
+cargo run --release --bin noxbot -- --count 10 --movement circular
 
 # Using npm scripts
 npm run build
-./target/release/nox-test --count 10 --movement circular
+./target/release/noxbot --count 10 --movement circular
 ```
 
 ## Project Structure
 
 - `relay/` - QUIC relay client library
-- `test/` - Load testing application
-- `api/` - API client (if needed)
+- `test/` - Load testing application (noxbot binary)
+- `api/` - API client
 
 ## Configuration
 

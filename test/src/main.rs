@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("nox_test=debug".parse().unwrap())
+                .add_directive("noxbot=debug".parse().unwrap())
                 .add_directive("nox_relay=debug".parse().unwrap())
                 .add_directive("nox_api=debug".parse().unwrap()),
         )
@@ -174,7 +174,7 @@ async fn main() -> Result<()> {
             let cmd = BotCommand {
                 index: i,
                 relay_addr,
-                instance_id: instance.id,
+                instance_id: instance.id as u64,
             };
             
             if tx_clone.send(cmd).await.is_err() {
