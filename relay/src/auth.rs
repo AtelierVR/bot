@@ -82,7 +82,7 @@ impl Credentials {
     ) -> Result<Self, String> {
         let public_key = RsaPublicKey::from_public_key_pem(public_pem)
             .map_err(|e| format!("Failed to parse public key: {}", e))?;
-        
+
         // Essayer d'abord PKCS#1 (BEGIN RSA PRIVATE KEY), puis PKCS#8 (BEGIN PRIVATE KEY)
         let private_key = RsaPrivateKey::from_pkcs1_pem(private_pem)
             .or_else(|_| RsaPrivateKey::from_pkcs8_pem(private_pem))
@@ -128,20 +128,25 @@ impl Credentials {
     /// Export la clé publique au format DER (SubjectPublicKeyInfo)
     pub fn public_key_der(&self) -> Result<Vec<u8>, String> {
         use rsa::pkcs8::EncodePublicKey;
-        let der = self.public_key.to_public_key_der()
+        let der = self
+            .public_key
+            .to_public_key_der()
             .map(|doc| doc.as_bytes().to_vec())
             .map_err(|e| format!("Failed to export public key: {}", e))?;
-        
+
         tracing::debug!("[Auth] Exported public key: {} bytes", der.len());
-        tracing::debug!("[Auth] Public key (first 64 bytes, hex): {}", hex::encode(&der[..der.len().min(64)]));
-        
+        tracing::debug!(
+            "[Auth] Public key (first 64 bytes, hex): {}",
+            hex::encode(&der[..der.len().min(64)])
+        );
+
         Ok(der)
     }
 
     /// Signe des données avec la clé privée (PKCS#1v15 SHA-256)
     pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        use rsa::signature::{Signer, SignatureEncoding};
         use rsa::pkcs1v15::SigningKey;
+        use rsa::signature::{SignatureEncoding, Signer};
         use sha2::Sha256;
 
         tracing::debug!("[Auth] Signing data: {} bytes", data.len());
@@ -151,10 +156,16 @@ impl Credentials {
         let signing_key = SigningKey::<Sha256>::new(self.private_key.clone());
         let signature = signing_key.sign(data);
         let signature_bytes = signature.to_vec();
-        
-        tracing::debug!("[Auth] Generated signature: {} bytes", signature_bytes.len());
-        tracing::debug!("[Auth] Signature (first 64 bytes, hex): {}", hex::encode(&signature_bytes[..signature_bytes.len().min(64)]));
-        
+
+        tracing::debug!(
+            "[Auth] Generated signature: {} bytes",
+            signature_bytes.len()
+        );
+        tracing::debug!(
+            "[Auth] Signature (first 64 bytes, hex): {}",
+            hex::encode(&signature_bytes[..signature_bytes.len().min(64)])
+        );
+
         Ok(signature_bytes)
     }
 }
@@ -194,18 +205,22 @@ pub fn create_resolve_request(
 pub fn parse_auth_response(data: &[u8]) -> Result<AuthResponse, String> {
     let mut buffer = Buffer::from_vec(data.to_vec());
 
-    let result_code = buffer.read_u8()
+    let result_code = buffer
+        .read_u8()
         .map_err(|e| format!("Failed to read result code: {}", e))?;
     let result = AuthResult::try_from(result_code)
         .map_err(|_| format!("Invalid auth result code: {}", result_code))?;
 
     match result {
         AuthResult::Success => {
-            let user_id = buffer.read_u32()
+            let user_id = buffer
+                .read_u32()
                 .map_err(|e| format!("Failed to read user_id: {}", e))?;
-            let address = buffer.read_string()
+            let address = buffer
+                .read_string()
                 .map_err(|e| format!("Failed to read address: {}", e))?;
-            let display_name = buffer.read_string()
+            let display_name = buffer
+                .read_string()
                 .map_err(|e| format!("Failed to read display_name: {}", e))?;
 
             Ok(AuthResponse::Success {
@@ -215,18 +230,24 @@ pub fn parse_auth_response(data: &[u8]) -> Result<AuthResponse, String> {
             })
         }
         AuthResult::Challenge => {
-            let challenge_len = buffer.read_u8()
-                .map_err(|e| format!("Failed to read challenge length: {}", e))? as usize;
-            let challenge = buffer.read_bytes(challenge_len)
+            let challenge_len = buffer
+                .read_u8()
+                .map_err(|e| format!("Failed to read challenge length: {}", e))?
+                as usize;
+            let challenge = buffer
+                .read_bytes(challenge_len)
                 .map_err(|e| format!("Failed to read challenge: {}", e))?;
 
             Ok(AuthResponse::Challenge { challenge })
         }
         AuthResult::Blacklisted => {
-            let expire_at = buffer.read_i64()
+            let expire_at = buffer
+                .read_i64()
                 .map_err(|e| format!("Failed to read expire_at: {}", e))?;
             let reason = if buffer.remaining() > 0 {
-                buffer.read_string().unwrap_or_else(|_| "Blacklisted".to_string())
+                buffer
+                    .read_string()
+                    .unwrap_or_else(|_| "Blacklisted".to_string())
             } else {
                 "Blacklisted".to_string()
             };

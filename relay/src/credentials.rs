@@ -33,7 +33,8 @@ impl NoxCredentials {
         let base_dir = format!("{}/.local/share", home);
 
         #[cfg(target_os = "windows")]
-        let base_dir = std::env::var("APPDATA").unwrap_or_else(|_| format!("{}\\AppData\\Roaming", home));
+        let base_dir =
+            std::env::var("APPDATA").unwrap_or_else(|_| format!("{}\\AppData\\Roaming", home));
 
         PathBuf::from(base_dir).join(".nox")
     }
@@ -58,18 +59,19 @@ impl NoxCredentials {
         let path = Self::config_path();
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file at {:?}", path))?;
-        serde_json::from_str(&content)
-            .with_context(|| "Failed to parse config.json")
+        serde_json::from_str(&content).with_context(|| "Failed to parse config.json")
     }
 
     /// Charge les credentials depuis le dossier .nox
     pub fn load() -> Result<Credentials> {
         let config = Self::load_config()?;
         let server = config.server;
-        
-        let server_config = config.servers.get(&server)
+
+        let server_config = config
+            .servers
+            .get(&server)
             .with_context(|| format!("Server '{}' not found in config", server))?;
-        
+
         let user_id = server_config.user_id;
 
         let public_pem = std::fs::read_to_string(Self::public_key_path())

@@ -15,8 +15,8 @@ pub trait Connector: Send + Sync {
 }
 
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio::io::{ReadHalf, WriteHalf};
+use tokio::sync::Mutex;
 
 pub struct TcpConnector {
     host: String,
@@ -153,9 +153,9 @@ impl Connector for UdpConnector {
 
 // ─── QUIC Connector ──────────────────────────────────────────────────────────
 
-use std::net::SocketAddr;
 use quinn::{ClientConfig, Connection, Endpoint};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use std::net::SocketAddr;
 
 /// A TLS verifier that accepts any server certificate.
 /// Used for bot testing where self-signed certificates are common.
@@ -285,14 +285,13 @@ impl Connector for QuicConnector {
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse::<SocketAddr>()?)?;
         endpoint.set_default_client_config(client_config);
 
-        let server_addr: SocketAddr = tokio::net::lookup_host(format!("{}:{}", self.host, self.port))
-            .await?
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("DNS resolution failed for {}", self.host))?;
+        let server_addr: SocketAddr =
+            tokio::net::lookup_host(format!("{}:{}", self.host, self.port))
+                .await?
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("DNS resolution failed for {}", self.host))?;
 
-        let conn = endpoint
-            .connect(server_addr, &self.host)?
-            .await?;
+        let conn = endpoint.connect(server_addr, &self.host)?.await?;
 
         debug!("QUIC connection established to {}:{}", self.host, self.port);
 
@@ -318,7 +317,9 @@ impl Connector for QuicConnector {
     async fn receive(&self, buf: &mut [u8]) -> Result<usize> {
         // This method is no longer used in QUIC mode since each request/response
         // happens on its own stream
-        Err(anyhow::anyhow!("QUIC: receive should not be called directly, use send_and_receive"))
+        Err(anyhow::anyhow!(
+            "QUIC: receive should not be called directly, use send_and_receive"
+        ))
     }
 
     async fn close(&mut self) -> Result<()> {
@@ -345,11 +346,11 @@ impl QuicConnector {
         if let Some(ref conn) = self.connection {
             // Open a new bidirectional stream for this request
             let (mut send, mut recv) = conn.open_bi().await?;
-            
+
             // Send the request
             send.write_all(data).await?;
             send.finish()?;
-            
+
             // Read the response
             let mut response = Vec::new();
             let mut buf = vec![0u8; 65536];
@@ -361,7 +362,7 @@ impl QuicConnector {
                     None => break, // Stream finished
                 }
             }
-            
+
             Ok(response)
         } else {
             Err(anyhow::anyhow!("QUIC: not connected"))

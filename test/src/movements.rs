@@ -1,5 +1,5 @@
-use nox_relay::{Transform, Vector3, Quaternion, RelayInstance, TransformRequest, TransformType};
 use async_trait::async_trait;
+use nox_relay::{Quaternion, RelayInstance, Transform, TransformRequest, TransformType, Vector3};
 
 #[async_trait]
 pub trait Movement: Send + Sync {
@@ -68,16 +68,18 @@ impl Movement for CircularMovement {
         state.position.z = angle.sin() * self.radius;
 
         // Send transform to relay
-        let _ = instance.transform(TransformRequest {
-            player_id: state.player_id,
-            rig_id: 0,
-            transform: Transform {
-                position: Some(state.position.clone()),
-                rotation: Some(state.rotation.clone()),
-                scale: None,
-            },
-            transform_type: TransformType::EntityPart,
-        }).await;
+        let _ = instance
+            .transform(TransformRequest {
+                player_id: state.player_id,
+                rig_id: 0,
+                transform: Transform {
+                    position: Some(state.position.clone()),
+                    rotation: Some(state.rotation.clone()),
+                    scale: None,
+                },
+                transform_type: TransformType::EntityPart,
+            })
+            .await;
     }
 }
 
@@ -101,23 +103,25 @@ impl Movement for RandomTeleportMovement {
 
     async fn update(&self, state: &mut MovementState, dt: f32, instance: &RelayInstance) {
         state.time += dt / 1000.0;
-        
+
         if state.time > 2.0 {
             state.time = 0.0;
             state.position.x = (rand::random::<f32>() - 0.5) * self.range;
             state.position.z = (rand::random::<f32>() - 0.5) * self.range;
-            
+
             // Send transform to relay
-            let _ = instance.transform(TransformRequest {
-                player_id: state.player_id,
-                rig_id: 0,
-                transform: Transform {
-                    position: Some(state.position.clone()),
-                    rotation: Some(state.rotation.clone()),
-                    scale: None,
-                },
-                transform_type: TransformType::EntityPart,
-            }).await;
+            let _ = instance
+                .transform(TransformRequest {
+                    player_id: state.player_id,
+                    rig_id: 0,
+                    transform: Transform {
+                        position: Some(state.position.clone()),
+                        rotation: Some(state.rotation.clone()),
+                        scale: None,
+                    },
+                    transform_type: TransformType::EntityPart,
+                })
+                .await;
         }
     }
 }
@@ -144,7 +148,7 @@ impl Movement for SquareMovement {
     async fn update(&self, state: &mut MovementState, dt: f32, instance: &RelayInstance) {
         state.time += dt / 1000.0;
         let progress = (state.time * self.speed) % 4.0;
-        
+
         let half_size = self.size / 2.0;
         match progress as i32 {
             0 => {
@@ -164,18 +168,20 @@ impl Movement for SquareMovement {
                 state.position.z = half_size - ((progress - 3.0).fract() * self.size);
             }
         }
-        
+
         // Send transform to relay
-        let _ = instance.transform(TransformRequest {
-            player_id: state.player_id,
-            rig_id: 0,
-            transform: Transform {
-                position: Some(state.position.clone()),
-                rotation: Some(state.rotation.clone()),
-                scale: None,
-            },
-            transform_type: TransformType::EntityPart,
-        }).await;
+        let _ = instance
+            .transform(TransformRequest {
+                player_id: state.player_id,
+                rig_id: 0,
+                transform: Transform {
+                    position: Some(state.position.clone()),
+                    rotation: Some(state.rotation.clone()),
+                    scale: None,
+                },
+                transform_type: TransformType::EntityPart,
+            })
+            .await;
     }
 }
 

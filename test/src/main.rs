@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use nox_api::Nox;
 use nox_relay::{
-    AvatarChangeRequest, EnterRequest, EnterFlags, HandshakeRequest, NoxRelay, RelayInstance,
-    SessionRequest, TcpConnector, UdpConnector, QuicConnector, TravelingRequest, TravelingAction,
+    AvatarChangeRequest, EnterFlags, EnterRequest, HandshakeRequest, NoxRelay, QuicConnector,
+    RelayInstance, SessionRequest, TcpConnector, TravelingAction, TravelingRequest, UdpConnector,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -64,7 +64,10 @@ async fn main() -> Result<()> {
 
     // Parse connection info
     if instance.connection.method != "relay" {
-        error!("Unsupported connection method: {}", instance.connection.method);
+        error!(
+            "Unsupported connection method: {}",
+            instance.connection.method
+        );
         return Ok(());
     }
 
@@ -72,8 +75,8 @@ async fn main() -> Result<()> {
     let connection_data = general_purpose::STANDARD
         .decode(&instance.connection.data)
         .context("Failed to decode connection data")?;
-    let connection_json: serde_json::Value = serde_json::from_slice(&connection_data)
-        .context("Failed to parse connection JSON")?;
+    let connection_json: serde_json::Value =
+        serde_json::from_slice(&connection_data).context("Failed to parse connection JSON")?;
 
     let addresses = connection_json["a"]
         .as_array()
@@ -86,7 +89,10 @@ async fn main() -> Result<()> {
     let scheme = match bot_protocol.as_str() {
         "tcp" | "udp" | "quic" => bot_protocol.clone(),
         other => {
-            error!("Unsupported BOT_PROTOCOL '{}'. Use tcp, udp, or quic.", other);
+            error!(
+                "Unsupported BOT_PROTOCOL '{}'. Use tcp, udp, or quic.",
+                other
+            );
             return Ok(());
         }
     };
@@ -103,69 +109,81 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    info!("Using {} relay addresses ({})", scheme.to_uppercase(), relay_addresses.len());
+    info!(
+        "Using {} relay addresses ({})",
+        scheme.to_uppercase(),
+        relay_addresses.len()
+    );
 
     // Bot creation parameters
     let bot_count = get_env_or_default("BOT_COUNT", 64);
     let concurrent_workers = get_env_or_default("CONCURRENT_BOTS", 10);
     let bot_delay_ms = get_env_or_default("BOT_DELAY_MS", 100);
-    
+
     info!(
         "Creating {} bots with {} concurrent workers ({}ms delay between spawns)...",
         bot_count, concurrent_workers, bot_delay_ms
     );
 
     let shutdown = Arc::new(AtomicBool::new(false));
-    
+
     // Track active bot tasks for graceful shutdown
     let active_bots = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-    
+
     // Create a queue for bot creation commands
     struct BotCommand {
         index: usize,
         relay_addr: String,
         instance_id: u64,
     }
-    
+
     let (tx, rx) = mpsc::channel::<BotCommand>(bot_count);
     let rx = Arc::new(tokio::sync::Mutex::new(rx));
-    
+
     // Spawn workers that consume from the queue
     let mut worker_handles = Vec::new();
     for worker_id in 0..concurrent_workers {
         let rx = rx.clone();
         let shutdown_flag = shutdown.clone();
         let active_bots_ref = active_bots.clone();
-        
+
         let worker = tokio::spawn(async move {
             loop {
                 // Check if shutdown was requested
                 if shutdown_flag.load(Ordering::Relaxed) {
                     break;
                 }
-                
+
                 // Try to get a bot command from the queue
                 let command = {
                     let mut rx_guard = rx.lock().await;
                     rx_guard.recv().await
                 };
-                
+
                 match command {
                     Some(cmd) => {
-                        if let Err(e) = create_bot(cmd.index, &cmd.relay_addr, cmd.instance_id, shutdown_flag.clone(), active_bots_ref.clone()).await {
+                        if let Err(e) = create_bot(
+                            cmd.index,
+                            &cmd.relay_addr,
+                            cmd.instance_id,
+                            shutdown_flag.clone(),
+                            active_bots_ref.clone(),
+                        )
+                        .await
+                        {
                             error!("Bot {} error: {}", cmd.index, e);
                         }
                     }
                     None => break, // Channel closed
                 }
             }
-            
+
             info!("Worker {} shutting down", worker_id);
         });
-        
+
         worker_handles.push(worker);
     }
-    
+
     // Enqueue all bot creation commands with delay
     let tx_clone = tx.clone();
     let producer = tokio::spawn(async move {
@@ -176,20 +194,20 @@ async fn main() -> Result<()> {
                 relay_addr,
                 instance_id: instance.id as u64,
             };
-            
+
             if tx_clone.send(cmd).await.is_err() {
                 error!("Failed to enqueue bot {}", i);
                 break;
             }
-            
+
             if i % 10 == 0 && i > 0 {
                 info!("Enqueued {} / {} bots", i, bot_count);
             }
-            
+
             // Delay between each bot enqueue
             tokio::time::sleep(tokio::time::Duration::from_millis(bot_delay_ms as u64)).await;
         }
-        
+
         info!("All {} bots enqueued", bot_count);
         // Don't drop tx_clone - keep channel open
     });
@@ -199,25 +217,19 @@ async fn main() -> Result<()> {
     // Wait for Ctrl+C
     tokio::signal::ctrl_c().await?;
     info!("Shutting down...");
-    
+
     // Signal all workers to stop
     shutdown.store(true, Ordering::Relaxed);
-    
+
     // Close the channel to wake up waiting workers
     drop(tx);
-    
+
     // Wait for producer to finish
-    let _ = tokio::time::timeout(
-        tokio::time::Duration::from_secs(2),
-        producer
-    ).await;
+    let _ = tokio::time::timeout(tokio::time::Duration::from_secs(2), producer).await;
 
     // Wait for all workers to complete with timeout
     for worker in worker_handles {
-        let _ = tokio::time::timeout(
-            tokio::time::Duration::from_secs(5),
-            worker
-        ).await;
+        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), worker).await;
     }
 
     // Wait for all bot tasks to finish disconnecting
@@ -226,38 +238,47 @@ async fn main() -> Result<()> {
         let mut bots = active_bots.lock().await;
         std::mem::take(&mut *bots)
     };
-    
+
     let total_bots = bot_tasks.len();
     for (i, task) in bot_tasks.into_iter().enumerate() {
         if i % 10 == 0 && i > 0 {
             info!("Waiting for bots to disconnect: {}/{}", i, total_bots);
         }
-        let _ = tokio::time::timeout(
-            tokio::time::Duration::from_secs(10),
-            task
-        ).await;
+        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(10), task).await;
     }
 
-    info!("All {} bots have been disconnected and shut down", total_bots);
+    info!(
+        "All {} bots have been disconnected and shut down",
+        total_bots
+    );
     Ok(())
 }
 
-async fn create_bot(index: usize, relay_addr: &str, instance_id: u64, shutdown: Arc<AtomicBool>, active_bots: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>) -> Result<()> {
+async fn create_bot(
+    index: usize,
+    relay_addr: &str,
+    instance_id: u64,
+    shutdown: Arc<AtomicBool>,
+    active_bots: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+) -> Result<()> {
     let url = Url::parse(relay_addr).context("Invalid relay address")?;
-    let host = url
-        .host_str()
-        .context("No host in URL")?
-        .to_string();
+    let host = url.host_str().context("No host in URL")?.to_string();
     let port = url.port().context("No port in URL")?;
     let scheme = url.scheme();
 
-    info!("[Bot {}] Connecting via {} to {}:{}...", index, scheme.to_uppercase(), host, port);
+    info!(
+        "[Bot {}] Connecting via {} to {}:{}...",
+        index,
+        scheme.to_uppercase(),
+        host,
+        port
+    );
 
     let connector: Box<dyn nox_relay::Connector> = match scheme {
-        "tcp"  => Box::new(TcpConnector::new(host, port)),
-        "udp"  => Box::new(UdpConnector::new(host, port)),
+        "tcp" => Box::new(TcpConnector::new(host, port)),
+        "udp" => Box::new(UdpConnector::new(host, port)),
         "quic" => Box::new(QuicConnector::new(host, port)),
-        other  => anyhow::bail!("Unsupported relay scheme: {}", other),
+        other => anyhow::bail!("Unsupported relay scheme: {}", other),
     };
     let relay = Arc::new(NoxRelay::new(connector));
 
@@ -279,16 +300,25 @@ async fn create_bot(index: usize, relay_addr: &str, instance_id: u64, shutdown: 
         {
             Ok(response) => break response,
             Err(e) if handshake_attempt < 5 => {
-                warn!("[Bot {}] Handshake attempt {} failed: {}", index, handshake_attempt, e);
+                warn!(
+                    "[Bot {}] Handshake attempt {} failed: {}",
+                    index, handshake_attempt, e
+                );
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             }
             Err(e) => return Err(e).context("Handshake failed after 5 attempts"),
         }
     };
 
-    info!("[Bot {}] Handshake successful: client_id={}, ip={}, port={}, master={:?}, keep_alive={}s", 
-          index, handshake_response.client_id, handshake_response.ip, 
-          handshake_response.port, handshake_response.master, handshake_response.keep_alive);
+    info!(
+        "[Bot {}] Handshake successful: client_id={}, ip={}, port={}, master={:?}, keep_alive={}s",
+        index,
+        handshake_response.client_id,
+        handshake_response.ip,
+        handshake_response.port,
+        handshake_response.master,
+        handshake_response.keep_alive
+    );
 
     // Démarrer le keep-alive automatique
     relay.start_keep_alive();
@@ -297,11 +327,16 @@ async fn create_bot(index: usize, relay_addr: &str, instance_id: u64, shutdown: 
     // Authentification
     match nox_relay::NoxCredentials::load() {
         Ok(credentials) => {
-            info!("[Bot {}] Credentials loaded: user_id={} server={}", 
-                  index, credentials.user_id, credentials.server);
+            info!(
+                "[Bot {}] Credentials loaded: user_id={} server={}",
+                index, credentials.user_id, credentials.server
+            );
             match relay.authenticate(&credentials).await {
                 Ok(auth_result) => {
-                    info!("[Bot {}] Authentication successful: {:?}", index, auth_result);
+                    info!(
+                        "[Bot {}] Authentication successful: {:?}",
+                        index, auth_result
+                    );
                 }
                 Err(e) => {
                     warn!("[Bot {}] Authentication failed: {}", index, e);
@@ -310,7 +345,10 @@ async fn create_bot(index: usize, relay_addr: &str, instance_id: u64, shutdown: 
             }
         }
         Err(e) => {
-            warn!("[Bot {}] Failed to load credentials: {} - continuing without authentication", index, e);
+            warn!(
+                "[Bot {}] Failed to load credentials: {} - continuing without authentication",
+                index, e
+            );
         }
     }
 
@@ -320,7 +358,11 @@ async fn create_bot(index: usize, relay_addr: &str, instance_id: u64, shutdown: 
         .await
         .context("Failed to get sessions")?;
 
-    info!("[Bot {}] Found {} instances", index, sessions.instances.len());
+    info!(
+        "[Bot {}] Found {} instances",
+        index,
+        sessions.instances.len()
+    );
 
     // Find the target instance
     let relay_instance_info = sessions
@@ -364,7 +406,8 @@ async fn create_bot(index: usize, relay_addr: &str, instance_id: u64, shutdown: 
     info!("[Bot {}] Traveling complete", index);
 
     // Change avatar and extract player_id
-    let bot_player_id = if let nox_relay::EnterResponse::Success { player_id, .. } = enter_response {
+    let bot_player_id = if let nox_relay::EnterResponse::Success { player_id, .. } = enter_response
+    {
         instance
             .change_avatar(AvatarChangeRequest {
                 player_id,
@@ -382,7 +425,12 @@ async fn create_bot(index: usize, relay_addr: &str, instance_id: u64, shutdown: 
     let movement = movements::get_random_movement();
     let mut movement_state = movement.initialize(index);
     movement_state.player_id = bot_player_id;
-    info!("[Bot {}] Using movement: {} (player_id={})", index, movement.name(), bot_player_id);
+    info!(
+        "[Bot {}] Using movement: {} (player_id={})",
+        index,
+        movement.name(),
+        bot_player_id
+    );
 
     // Get tps for movement
     let tps = if let nox_relay::EnterResponse::Success { tps, .. } = enter_response {
@@ -390,7 +438,7 @@ async fn create_bot(index: usize, relay_addr: &str, instance_id: u64, shutdown: 
     } else {
         20
     };
-    
+
     // Spawn movement loop as independent task so worker can handle next bot
     info!("[Bot {}] Spawning movement loop task", index);
     let bot_task = tokio::spawn(async move {
@@ -403,39 +451,48 @@ async fn create_bot(index: usize, relay_addr: &str, instance_id: u64, shutdown: 
             if shutdown.load(Ordering::Relaxed) {
                 info!("[Bot {}] Shutting down gracefully...", index);
                 // Déconnexion propre avant fermeture
-                if let Err(e) = relay.disconnect(Some("Shutdown requested".to_string())).await {
+                if let Err(e) = relay
+                    .disconnect(Some("Shutdown requested".to_string()))
+                    .await
+                {
                     warn!("[Bot {}] Disconnect error: {}", index, e);
                 }
                 let _ = relay.close().await;
                 break;
             }
-            
+
             // Vérifier si le relay est toujours connecté
             if !relay.is_connected() {
                 warn!("[Bot {}] Relay disconnected, stopping movement loop", index);
                 break;
             }
-            
+
             interval.tick().await;
             tick_count += 1;
-            
+
             // Afficher le dernier ping toutes les 5 secondes environ (dépend du TPS)
             if tick_count % (tps * 5) == 0 {
                 if let Some(ping) = relay.get_last_ping().await {
                     debug!(
                         "[Bot {}] Latency: up={}ms, down={}ms, total={}ms",
-                        index, ping.up(), ping.down(), ping.total()
+                        index,
+                        ping.up(),
+                        ping.down(),
+                        ping.total()
                     );
                 }
             }
-            
+
             movement.update(&mut movement_state, dt, &instance).await;
         }
     });
-    
+
     // Register the bot task for graceful shutdown
     active_bots.lock().await.push(bot_task);
 
-    info!("[Bot {}] Bot creation complete, worker can process next bot", index);
+    info!(
+        "[Bot {}] Bot creation complete, worker can process next bot",
+        index
+    );
     Ok(())
 }

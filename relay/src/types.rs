@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use bitflags::bitflags;
+use std::collections::HashMap;
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,7 +28,7 @@ bitflags! {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TravelingAction {
     Travel = 0,
-    Ready  = 1,
+    Ready = 1,
     Failed = 2,
 }
 
@@ -41,7 +41,7 @@ impl TravelingAction {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransformType {
-    ByPath     = 0,
+    ByPath = 0,
     EntityPart = 1,
 }
 

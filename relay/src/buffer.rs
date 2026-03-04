@@ -57,49 +57,70 @@ impl Buffer {
 
     pub fn read_u8(&mut self) -> io::Result<u8> {
         if self.data.remaining() < 1 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Not enough data"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough data",
+            ));
         }
         Ok(self.data.get_u8())
     }
 
     pub fn read_u16(&mut self) -> io::Result<u16> {
         if self.data.remaining() < 2 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Not enough data"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough data",
+            ));
         }
         Ok(self.data.get_u16())
     }
 
     pub fn read_u32(&mut self) -> io::Result<u32> {
         if self.data.remaining() < 4 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Not enough data"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough data",
+            ));
         }
         Ok(self.data.get_u32())
     }
 
     pub fn read_u64(&mut self) -> io::Result<u64> {
         if self.data.remaining() < 8 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Not enough data"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough data",
+            ));
         }
         Ok(self.data.get_u64())
     }
 
     pub fn read_i64(&mut self) -> io::Result<i64> {
         if self.data.remaining() < 8 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Not enough data"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough data",
+            ));
         }
         Ok(self.data.get_i64())
     }
 
     pub fn read_f32(&mut self) -> io::Result<f32> {
         if self.data.remaining() < 4 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Not enough data"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough data",
+            ));
         }
         Ok(self.data.get_f32())
     }
 
     pub fn read_bytes(&mut self, len: usize) -> io::Result<Vec<u8>> {
         if self.data.remaining() < len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Not enough data"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough data",
+            ));
         }
         let mut buf = vec![0u8; len];
         self.data.copy_to_slice(&mut buf);

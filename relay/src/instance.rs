@@ -24,7 +24,7 @@ impl RelayInstance {
     pub async fn enter(&self, request: EnterRequest) -> Result<EnterResponse> {
         let mut buffer = Buffer::new();
         buffer.write_u8(self.id as u8); // Instance internal ID
-        
+
         // Calculate enter flags - auto-add flags based on provided data
         let mut flags = request.flags;
         if !request.display.is_empty() {
@@ -33,9 +33,9 @@ impl RelayInstance {
         if request.password.is_some() && !request.password.as_ref().unwrap().is_empty() {
             flags |= EnterFlags::USE_PASSWORD;
         }
-        
+
         buffer.write_u8(flags.bits());
-        
+
         if flags.contains(EnterFlags::USE_PSEUDONYM) {
             buffer.write_string(&request.display);
         }
@@ -43,21 +43,26 @@ impl RelayInstance {
             buffer.write_string(request.password.as_deref().unwrap_or(""));
         }
 
-        let response = self.relay.request_internal(
-            crate::protocol::RequestType::Enter,
-            crate::protocol::ResponseType::Enter,
-            buffer.as_slice(),
-            10000
-        ).await?;
-        
+        let response = self
+            .relay
+            .request_internal(
+                crate::protocol::RequestType::Enter,
+                crate::protocol::ResponseType::Enter,
+                buffer.as_slice(),
+                10000,
+            )
+            .await?;
+
         if response.is_empty() {
-            return Err(anyhow::anyhow!("Empty response from server - not authenticated?"));
+            return Err(anyhow::anyhow!(
+                "Empty response from server - not authenticated?"
+            ));
         }
-        
+
         let mut buf = Buffer::from_vec(response);
         let _iid = buf.read_u8()?;
         let result = buf.read_u8()?;
-        
+
         if result == 0 {
             // Success
             let player_flags = buf.read_u32()?;
@@ -69,14 +74,16 @@ impl RelayInstance {
             let tps = buf.read_u8()?;
             let _threshold = buf.read_f32()?;
             let entity_id = buf.read_f32()? as u16;
-            
+
             Ok(EnterResponse::Success {
                 player_id,
                 entity_id,
                 tps,
             })
         } else {
-            let reason = buf.read_string().unwrap_or_else(|_| "Unknown error".to_string());
+            let reason = buf
+                .read_string()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             Ok(EnterResponse::Error {
                 code: result,
                 reason,
@@ -88,29 +95,34 @@ impl RelayInstance {
         let mut buffer = Buffer::new();
         buffer.write_u8(self.id as u8); // Instance internal ID
         buffer.write_u8(request.action.as_u8());
-        
+
         if request.action == TravelingAction::Failed && request.reason.is_some() {
             buffer.write_string(request.reason.as_ref().unwrap());
         }
 
-        let response = self.relay.request_internal(
-            crate::protocol::RequestType::Traveling,
-            crate::protocol::ResponseType::Traveling,
-            buffer.as_slice(),
-            15000
-        ).await?;
-        
+        let response = self
+            .relay
+            .request_internal(
+                crate::protocol::RequestType::Traveling,
+                crate::protocol::ResponseType::Traveling,
+                buffer.as_slice(),
+                15000,
+            )
+            .await?;
+
         let mut buf = Buffer::from_vec(response);
         let _iid = buf.read_u8()?;
         let results = buf.read_u8()?;
-        
+
         // Check for ready flag (0x20)
         if results & 0x20 != 0 {
             Ok(TravelingResponse::Success {
                 status: "ready".to_string(),
             })
         } else if results & 0x10 != 0 {
-            let reason = buf.read_string().unwrap_or_else(|_| "Unknown error".to_string());
+            let reason = buf
+                .read_string()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             Ok(TravelingResponse::Error { reason })
         } else {
             Ok(TravelingResponse::Success {
@@ -121,17 +133,17 @@ impl RelayInstance {
 
     pub async fn transform(&self, request: TransformRequest) -> Result<()> {
         use crate::types::TransformFlags;
-        
+
         let mut buffer = Buffer::new();
         buffer.write_u8(self.id as u8); // Instance internal ID
-        
+
         // Transform type
         buffer.write_u8(request.transform_type.as_u8());
-        
+
         // Player ID and Rig ID
         buffer.write_u16(request.player_id);
         buffer.write_u16(request.rig_id);
-        
+
         // Write transform flags
         let mut flags = TransformFlags::empty();
         if request.transform.position.is_some() {
@@ -164,11 +176,10 @@ impl RelayInstance {
             buffer.write_f32(scale.z);
         }
 
-        self.relay.send_internal(
-            crate::protocol::RequestType::Transform,
-            buffer.as_slice()
-        ).await?;
-        
+        self.relay
+            .send_internal(crate::protocol::RequestType::Transform, buffer.as_slice())
+            .await?;
+
         Ok(())
     }
 
@@ -177,44 +188,56 @@ impl RelayInstance {
         buffer.write_u8(self.id as u8); // Instance internal ID
         buffer.write_u16(request.entity_id);
         buffer.write_u16(request.parameters.len() as u16);
-        
+
         for (key, value) in &request.parameters {
             buffer.write_string(key);
             buffer.write_u16(value.len() as u16);
             buffer.write_bytes(value);
         }
 
-        self.relay.send_internal(
-            crate::protocol::RequestType::Properties,
-            buffer.as_slice()
-        ).await?;
-        
+        self.relay
+            .send_internal(crate::protocol::RequestType::Properties, buffer.as_slice())
+            .await?;
+
         Ok(())
     }
 
-    pub async fn change_avatar(&self, request: AvatarChangeRequest) -> Result<AvatarChangeResponse> {
+    pub async fn change_avatar(
+        &self,
+        request: AvatarChangeRequest,
+    ) -> Result<AvatarChangeResponse> {
         let mut buffer = Buffer::new();
         buffer.write_u8(self.id as u8); // Instance internal ID
         buffer.write_u16(request.player_id);
         buffer.write_u64(request.avatar_id);
         buffer.write_string(&request.avatar_server);
 
-        let response = self.relay.request_internal(
-            crate::protocol::RequestType::AvatarChanged,
-            crate::protocol::ResponseType::AvatarChanged,
-            buffer.as_slice(),
-            5000
-        ).await?;
-        
+        let response = self
+            .relay
+            .request_internal(
+                crate::protocol::RequestType::AvatarChanged,
+                crate::protocol::ResponseType::AvatarChanged,
+                buffer.as_slice(),
+                5000,
+            )
+            .await?;
+
         let mut buf = Buffer::from_vec(response);
         let _iid = buf.read_u8()?;
         let result = buf.read_u8()?;
-        
-        if result == 0x01 { // Success
+
+        if result == 0x01 {
+            // Success
             Ok(AvatarChangeResponse::Success)
-        } else if result == 0x02 { // Failed
-            let message = buf.read_string().unwrap_or_else(|_| "Unknown error".to_string());
-            Ok(AvatarChangeResponse::Error { code: result, message })
+        } else if result == 0x02 {
+            // Failed
+            let message = buf
+                .read_string()
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            Ok(AvatarChangeResponse::Error {
+                code: result,
+                message,
+            })
         } else {
             Ok(AvatarChangeResponse::Failed)
         }
@@ -232,11 +255,10 @@ impl RelayInstance {
             buffer.write_u16(*target);
         }
 
-        self.relay.send_internal(
-            crate::protocol::RequestType::Event,
-            buffer.as_slice()
-        ).await?;
-        
+        self.relay
+            .send_internal(crate::protocol::RequestType::Event, buffer.as_slice())
+            .await?;
+
         Ok(())
     }
 }

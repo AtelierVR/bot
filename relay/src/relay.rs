@@ -8,11 +8,11 @@ use crate::protocol::{RequestType, ResponseType};
 use crate::types::*;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::{timeout, Duration};
 use tracing::{debug, info, warn};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct NoxRelay {
     connector: Arc<RwLock<Box<dyn Connector>>>,
@@ -75,13 +75,17 @@ impl NoxRelay {
             match self.latency().await {
                 Ok(response) => {
                     *self.last_ping.lock().await = Some(response.clone());
-                    debug!("Ping: up={}ms down={}ms total={}ms",
-                           response.up(), response.down(), response.total());
+                    debug!(
+                        "Ping: up={}ms down={}ms total={}ms",
+                        response.up(),
+                        response.down(),
+                        response.total()
+                    );
                 }
                 Err(e) => {
                     warn!("Latency check failed: {} - possible disconnection", e);
                     self.running.store(false, Ordering::SeqCst);
-                    
+
                     break;
                 }
             }
@@ -118,17 +122,25 @@ impl NoxRelay {
         buffer.write_u16(state);
         buffer.write_u8(request_type as u8);
         buffer.write_bytes(data);
-        
+
         let packet = buffer.as_slice();
-        // debug!("Sending request: {:?}, state: {}, packet_len: {}", 
+        // debug!("Sending request: {:?}, state: {}, packet_len: {}",
         //        request_type, state, packet.len());
 
         // Use the QUIC connector's send_and_receive which opens a new stream
         let connector = self.connector.read().await;
-        
+
         // Downcast to QuicConnector to use send_and_receive
-        let response_data = if let Some(quic) = connector.as_any().downcast_ref::<crate::connector::QuicConnector>() {
-            match timeout(Duration::from_millis(timeout_ms), quic.send_and_receive(packet)).await {
+        let response_data = if let Some(quic) = connector
+            .as_any()
+            .downcast_ref::<crate::connector::QuicConnector>()
+        {
+            match timeout(
+                Duration::from_millis(timeout_ms),
+                quic.send_and_receive(packet),
+            )
+            .await
+            {
                 Ok(Ok(response)) => Ok(response),
                 Ok(Err(e)) => Err(anyhow!("Send/receive error: {}", e)),
                 Err(_) => Err(anyhow!("Request timeout after {}ms", timeout_ms)),
@@ -146,7 +158,7 @@ impl NoxRelay {
         let _length = buf.read_u16()?;
         let resp_state = buf.read_u16()?;
         let _type_byte = buf.read_u8()?;
-        
+
         if resp_state != state {
             warn!("State mismatch: sent {}, received {}", state, resp_state);
         }
@@ -154,7 +166,7 @@ impl NoxRelay {
         // Remaining data is the actual payload
         let payload_len = buf.remaining();
         let payload = buf.read_bytes(payload_len)?;
-        
+
         // debug!("Received response for state {}: {} bytes payload", state, payload.len());
         Ok(payload)
     }
@@ -166,36 +178,51 @@ impl NoxRelay {
         buffer.write_string(&request.engine);
         buffer.write_string(&request.platform);
 
-        info!("📤 Handshake Buffer: hex={}, bytes={:?}, length={}", 
-            buffer.as_slice().iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" "),
+        info!(
+            "📤 Handshake Buffer: hex={}, bytes={:?}, length={}",
+            buffer
+                .as_slice()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join(" "),
             buffer.as_slice(),
             buffer.as_slice().len()
         );
 
-        let response = self.request_with_response(RequestType::Handshake, buffer.as_slice(), 10000).await?;
+        let response = self
+            .request_with_response(RequestType::Handshake, buffer.as_slice(), 10000)
+            .await?;
         let mut buf = Buffer::from_vec(response);
-        
+
         let protocol = buf.read_u16()?;
         let client_id = buf.read_u16()?;
-        
+
         // Read IP as 4 bytes
         let ip_bytes = buf.read_bytes(4)?;
-        let ip = format!("{}.{}.{}.{}", ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
-        
+        let ip = format!(
+            "{}.{}.{}.{}",
+            ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
+        );
+
         let port = buf.read_u16()?;
         let flags_byte = buf.read_u8()?;
-        
+
         // Parse flags (TODO: implement proper flag parsing)
         let is_offline = (flags_byte & 0x01) != 0;
-        let flags = if is_offline { vec!["is_offline".to_string()] } else { vec![] };
-        
+        let flags = if is_offline {
+            vec!["is_offline".to_string()]
+        } else {
+            vec![]
+        };
+
         // Master server string (only if not offline)
         let master = if !is_offline {
             Some(buf.read_string()?)
         } else {
             None
         };
-        
+
         let max_packet_size = buf.read_u16()?;
         let timeout = buf.read_u16()?; // in seconds
         let keep_alive = buf.read_u16()?; // in seconds
@@ -218,7 +245,10 @@ impl NoxRelay {
 
     /// Effectue l'authentification complète avec challenge/response
     pub async fn authenticate(&self, credentials: &Credentials) -> Result<AuthResponse> {
-        info!("Starting authentication for user {}@{}", credentials.user_id, credentials.server);
+        info!(
+            "Starting authentication for user {}@{}",
+            credentials.user_id, credentials.server
+        );
 
         // Étape 1: Demander un challenge
         let challenge_req = create_challenge_request();
@@ -226,8 +256,7 @@ impl NoxRelay {
             .request_with_response(RequestType::Authentication, &challenge_req, 5000)
             .await?;
 
-        let challenge_resp = parse_auth_response(&challenge_resp_data)
-            .map_err(|e| anyhow!(e))?;
+        let challenge_resp = parse_auth_response(&challenge_resp_data).map_err(|e| anyhow!(e))?;
 
         let challenge = match challenge_resp {
             AuthResponse::Challenge { challenge } => {
@@ -236,7 +265,11 @@ impl NoxRelay {
                 challenge
             }
             AuthResponse::Error { result, reason, .. } => {
-                return Err(anyhow!("Challenge request failed: {:?} - {}", result, reason));
+                return Err(anyhow!(
+                    "Challenge request failed: {:?} - {}",
+                    result,
+                    reason
+                ));
             }
             _ => {
                 return Err(anyhow!("Unexpected response to challenge request"));
@@ -244,20 +277,24 @@ impl NoxRelay {
         };
 
         // Étape 2: Signer le challenge
-        let signature = credentials.sign(&challenge)
-            .map_err(|e| anyhow!(e))?;
-        debug!("[Auth] Signed challenge: {} bytes signature", signature.len());
-        debug!("[Auth] Signature (first 64 bytes, hex): {}", hex::encode(&signature[..signature.len().min(64)]));
+        let signature = credentials.sign(&challenge).map_err(|e| anyhow!(e))?;
+        debug!(
+            "[Auth] Signed challenge: {} bytes signature",
+            signature.len()
+        );
+        debug!(
+            "[Auth] Signature (first 64 bytes, hex): {}",
+            hex::encode(&signature[..signature.len().min(64)])
+        );
 
         // Étape 3: Envoyer la résolution du challenge
-        let resolve_req = create_resolve_request(credentials, &signature)
-            .map_err(|e| anyhow!(e))?;
+        let resolve_req =
+            create_resolve_request(credentials, &signature).map_err(|e| anyhow!(e))?;
         let resolve_resp_data = self
             .request_with_response(RequestType::Authentication, &resolve_req, 10000)
             .await?;
 
-        let resolve_resp = parse_auth_response(&resolve_resp_data)
-            .map_err(|e| anyhow!(e))?;
+        let resolve_resp = parse_auth_response(&resolve_resp_data).map_err(|e| anyhow!(e))?;
 
         match &resolve_resp {
             AuthResponse::Success {
@@ -283,17 +320,19 @@ impl NoxRelay {
 
     pub async fn latency(&self) -> Result<LatencyResponse> {
         let initial = chrono::Utc::now().timestamp_millis();
-        
+
         let mut buffer = Buffer::new();
         buffer.write_u64(initial as u64);
 
-        let response = self.request_with_response(RequestType::Latency, buffer.as_slice(), 5000).await?;
+        let response = self
+            .request_with_response(RequestType::Latency, buffer.as_slice(), 5000)
+            .await?;
         let mut buf = Buffer::from_vec(response);
-        
+
         let initial_resp = buf.read_i64()?;
         let intermediate = buf.read_i64()?;
         let final_time = chrono::Utc::now().timestamp_millis();
-        
+
         Ok(LatencyResponse {
             initial: initial_resp,
             intermediate,
@@ -304,34 +343,39 @@ impl NoxRelay {
     pub async fn sessions(&self, request: SessionRequest) -> Result<SessionResponse> {
         info!("Requesting sessions page {}", request.page);
         let mut buffer = Buffer::new();
-        buffer.write_u8(request.page as u8);  // page is u8
+        buffer.write_u8(request.page as u8); // page is u8
 
-        let response = self.request_with_response(RequestType::Sessions, buffer.as_slice(), 10000).await?;
+        let response = self
+            .request_with_response(RequestType::Sessions, buffer.as_slice(), 10000)
+            .await?;
         let mut buf = Buffer::from_vec(response);
-        
-        let count = buf.read_u8()? as usize;  // count is 1 byte
+
+        let count = buf.read_u8()? as usize; // count is 1 byte
         let mut instances = Vec::with_capacity(count);
-        
+
         for _ in 0..count {
-            let _flags = buf.read_u32()?;      // flags: 4 bytes
-            let id = buf.read_u8()? as u64;   // iid: 1 byte
-            let master = buf.read_u32()? as u64;  // master: 4 bytes  
-            let player_count = buf.read_u16()?;   // playerCount: 2 bytes
-            let capacity = buf.read_u16()?;       // capacity: 2 bytes
-            
+            let _flags = buf.read_u32()?; // flags: 4 bytes
+            let id = buf.read_u8()? as u64; // iid: 1 byte
+            let master = buf.read_u32()? as u64; // master: 4 bytes
+            let player_count = buf.read_u16()?; // playerCount: 2 bytes
+            let capacity = buf.read_u16()?; // capacity: 2 bytes
+
             instances.push(RelayInstanceInfo {
                 id,
                 master,
-                name: format!("Instance {}", id),  // No name in protocol
+                name: format!("Instance {}", id), // No name in protocol
                 capacity: capacity as u32,
                 client_count: player_count as u32,
             });
         }
-        
-        let current_page = buf.read_u8()?;   // current page: 1 byte
-        let total_pages = buf.read_u8()?;    // total pages: 1 byte
-        
-        debug!("Sessions: {} instances, page {}/{}", count, current_page, total_pages);
+
+        let current_page = buf.read_u8()?; // current page: 1 byte
+        let total_pages = buf.read_u8()?; // total pages: 1 byte
+
+        debug!(
+            "Sessions: {} instances, page {}/{}",
+            count, current_page, total_pages
+        );
 
         Ok(SessionResponse { instances })
     }
@@ -339,7 +383,7 @@ impl NoxRelay {
     /// Envoie une requête de déconnexion propre au serveur relay
     pub async fn disconnect(&self, reason: Option<String>) -> Result<DisconnectResponse> {
         info!("Disconnecting from relay (reason: {:?})", reason);
-        
+
         let mut buffer = Buffer::new();
         if let Some(ref r) = reason {
             if !r.is_empty() {
@@ -347,11 +391,9 @@ impl NoxRelay {
             }
         }
 
-        let response = self.request_with_response(
-            RequestType::Disconnect,
-            buffer.as_slice(),
-            5000
-        ).await?;
+        let response = self
+            .request_with_response(RequestType::Disconnect, buffer.as_slice(), 5000)
+            .await?;
 
         let mut buf = Buffer::from_vec(response);
         let response_reason = if buf.remaining() > 2 {
@@ -370,7 +412,7 @@ impl NoxRelay {
         self.running.store(false, Ordering::SeqCst);
         let mut connector = self.connector.write().await;
         connector.close().await?;
-        
+
         Ok(())
     }
 
@@ -390,7 +432,8 @@ impl NoxRelay {
         data: &[u8],
         timeout_ms: u64,
     ) -> Result<Vec<u8>> {
-        self.request_with_response(request_type, data, timeout_ms).await
+        self.request_with_response(request_type, data, timeout_ms)
+            .await
     }
 
     /// Internal send method (no response expected) for use by RelayInstance
@@ -401,22 +444,25 @@ impl NoxRelay {
 
         let length = 3 + data.len();
         let mut buffer = Buffer::with_capacity(length);
-        buffer.write_u16(uid);  // UID instead of length
+        buffer.write_u16(uid); // UID instead of length
         buffer.write_u8(request_type as u8);
         buffer.write_bytes(data);
-        
+
         let packet = buffer.as_slice();
-        // debug!("Sending one-way request: {:?}, uid: {}, packet_len: {}", 
+        // debug!("Sending one-way request: {:?}, uid: {}, packet_len: {}",
         //        request_type, uid, packet.len());
 
         let connector = self.connector.read().await;
-        
-        if let Some(quic) = connector.as_any().downcast_ref::<crate::connector::QuicConnector>() {
+
+        if let Some(quic) = connector
+            .as_any()
+            .downcast_ref::<crate::connector::QuicConnector>()
+        {
             quic.send_datagram(packet).await?;
         } else {
             return Err(anyhow!("Connector is not a QuicConnector"));
         }
-        
+
         Ok(())
     }
 }
