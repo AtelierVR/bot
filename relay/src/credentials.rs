@@ -21,7 +21,11 @@ pub struct NoxCredentials;
 
 impl NoxCredentials {
     /// Obtient le chemin du dossier .nox
-    pub fn nox_folder() -> PathBuf {
+    pub fn nox_folder(custom_path: Option<PathBuf>) -> PathBuf {
+        if let Some(path) = custom_path {
+            return path;
+        }
+
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| ".".to_string());
@@ -40,31 +44,31 @@ impl NoxCredentials {
     }
 
     /// Obtient le chemin du fichier de configuration
-    pub fn config_path() -> PathBuf {
-        Self::nox_folder().join("config.json")
+    pub fn config_path(custom_path: Option<PathBuf>) -> PathBuf {
+        Self::nox_folder(custom_path).join("config.json")
     }
 
     /// Obtient le chemin de la clé publique
-    pub fn public_key_path() -> PathBuf {
-        Self::nox_folder().join("public_key.pem")
+    pub fn public_key_path(custom_path: Option<PathBuf>) -> PathBuf {
+        Self::nox_folder(custom_path).join("public_key.pem")
     }
 
     /// Obtient le chemin de la clé privée
-    pub fn private_key_path() -> PathBuf {
-        Self::nox_folder().join("private_key.pem")
+    pub fn private_key_path(custom_path: Option<PathBuf>) -> PathBuf {
+        Self::nox_folder(custom_path).join("private_key.pem")
     }
 
     /// Charge la configuration depuis config.json
-    pub fn load_config() -> Result<NoxConfig> {
-        let path = Self::config_path();
+    pub fn load_config(custom_path: Option<PathBuf>) -> Result<NoxConfig> {
+        let path = Self::config_path(custom_path.clone());
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file at {:?}", path))?;
         serde_json::from_str(&content).with_context(|| "Failed to parse config.json")
     }
 
     /// Charge les credentials depuis le dossier .nox
-    pub fn load() -> Result<Credentials> {
-        let config = Self::load_config()?;
+    pub fn load(custom_path: Option<PathBuf>) -> Result<Credentials> {
+        let config = Self::load_config(custom_path.clone())?;
         let server = config.server;
 
         let server_config = config
@@ -74,9 +78,9 @@ impl NoxCredentials {
 
         let user_id = server_config.user_id;
 
-        let public_pem = std::fs::read_to_string(Self::public_key_path())
+        let public_pem = std::fs::read_to_string(Self::public_key_path(custom_path.clone()))
             .context("Failed to read public key")?;
-        let private_pem = std::fs::read_to_string(Self::private_key_path())
+        let private_pem = std::fs::read_to_string(Self::private_key_path(custom_path))
             .context("Failed to read private key")?;
 
         Credentials::from_pem(user_id, server, &public_pem, &private_pem)
@@ -84,10 +88,10 @@ impl NoxCredentials {
     }
 
     /// Vérifie si les credentials existent
-    pub fn exists() -> bool {
-        Self::config_path().exists()
-            && Self::public_key_path().exists()
-            && Self::private_key_path().exists()
+    pub fn exists(custom_path: Option<PathBuf>) -> bool {
+        Self::config_path(custom_path.clone()).exists()
+            && Self::public_key_path(custom_path.clone()).exists()
+            && Self::private_key_path(custom_path).exists()
     }
 }
 
@@ -97,7 +101,7 @@ mod tests {
 
     #[test]
     fn test_nox_folder_path() {
-        let path = NoxCredentials::nox_folder();
+        let path = NoxCredentials::nox_folder(None);
         assert!(path.to_str().unwrap().contains(".nox"));
     }
 }

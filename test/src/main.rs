@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
+use clap::Parser;
 use nox_api::Nox;
 use nox_relay::{
     AvatarChangeRequest, EnterFlags, EnterRequest, HandshakeRequest, NoxRelay, QuicConnector,
     RelayInstance, SessionRequest, TcpConnector, TravelingAction, TravelingRequest, UdpConnector,
 };
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -11,6 +13,20 @@ use tracing::{debug, error, info, warn};
 use url::Url;
 
 mod movements;
+
+/// Nox bot load testing tool
+#[derive(Parser, Debug)]
+#[command(name = "noxbot")]
+#[command(about = "Load testing bot for Nox relay servers")]
+struct Args {
+    /// Instance to connect to in format: id@server (e.g., 1@hactazia.fr)
+    #[arg(short, long)]
+    instance: String,
+
+    /// Custom config directory (default: ~/.local/share/.nox or %APPDATA%/.nox)
+    #[arg(short, long)]
+    config_dir: Option<PathBuf>,
+}
 
 fn get_env_or_default(key: &str, default: usize) -> usize {
     std::env::var(key)
@@ -21,6 +37,8 @@ fn get_env_or_default(key: &str, default: usize) -> usize {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -33,22 +51,41 @@ async fn main() -> Result<()> {
 
     info!("Starting Nox bot test...");
 
-    // Create API client
-    let nox = Nox::new("https://nox.hactazia.fr/");
-
-    // Get user info
-    info!("Fetching user info...");
-    let user_response = nox.get_user_by_username("hactazia").await;
-    if let Some(user) = user_response.data {
-        info!("User: {} (ID: {})", user.username, user.id);
-    } else {
-        error!("Failed to fetch user: {:?}", user_response.error);
+    // Parse instance argument (format: id@server)
+    let instance_parts: Vec<&str> = args.instance.split('@').collect();
+    if instance_parts.len() != 2 {
+        error!("Invalid instance format. Expected: id@server (e.g., 1@hactazia.fr)");
         return Ok(());
     }
 
+    let instance_id: u32 = instance_parts[0]
+        .parse()
+        .context("Failed to parse instance ID")?;
+    let server = instance_parts[1];
+
+    info!(
+        "Target instance: {} (server: {})",
+        instance_id, server
+    );
+
+    // Display config directory
+    if let Some(ref config_dir) = args.config_dir {
+        info!("Using custom config directory: {:?}", config_dir);
+    } else {
+        info!(
+            "Using default config directory: {:?}",
+            nox_relay::NoxCredentials::nox_folder(None)
+        );
+    }
+
+    // Create API client
+    let api_url = format!("https://nox.{}/", server);
+    info!("Connecting to API: {}", api_url);
+    let nox = Nox::new(&api_url);
+
     // Get instance info
     info!("Fetching instance info...");
-    let instance_response = nox.get_instance_by_id(2).await;
+    let instance_response = nox.get_instance_by_id(instance_id).await;
     let instance = match instance_response.data {
         Some(inst) => inst,
         None => {
@@ -135,6 +172,7 @@ async fn main() -> Result<()> {
         index: usize,
         relay_addr: String,
         instance_id: u64,
+        config_dir: Option<PathBuf>,
     }
 
     let (tx, rx) = mpsc::channel::<BotCommand>(bot_count);
@@ -166,6 +204,7 @@ async fn main() -> Result<()> {
                             cmd.index,
                             &cmd.relay_addr,
                             cmd.instance_id,
+                            cmd.config_dir,
                             shutdown_flag.clone(),
                             active_bots_ref.clone(),
                         )
@@ -186,6 +225,7 @@ async fn main() -> Result<()> {
 
     // Enqueue all bot creation commands with delay
     let tx_clone = tx.clone();
+    let config_dir_clone = args.config_dir.clone();
     let producer = tokio::spawn(async move {
         for i in 0..bot_count {
             let relay_addr = relay_addresses[i % relay_addresses.len()].clone();
@@ -193,6 +233,7 @@ async fn main() -> Result<()> {
                 index: i,
                 relay_addr,
                 instance_id: instance.id as u64,
+                config_dir: config_dir_clone.clone(),
             };
 
             if tx_clone.send(cmd).await.is_err() {
@@ -258,6 +299,7 @@ async fn create_bot(
     index: usize,
     relay_addr: &str,
     instance_id: u64,
+    config_dir: Option<PathBuf>,
     shutdown: Arc<AtomicBool>,
     active_bots: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 ) -> Result<()> {
@@ -325,7 +367,7 @@ async fn create_bot(
     info!("[Bot {}] Keep-alive started", index);
 
     // Authentification
-    match nox_relay::NoxCredentials::load() {
+    match nox_relay::NoxCredentials::load(config_dir) {
         Ok(credentials) => {
             info!(
                 "[Bot {}] Credentials loaded: user_id={} server={}",
