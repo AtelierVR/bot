@@ -504,7 +504,9 @@ async fn create_bot(
         .await;
 
     // Start listening for server broadcasts
+    info!("[Bot {}] Starting datagram listener...", index);
     relay.start_datagram_listener();
+    info!("[Bot {}] Datagram listener started", index);
 
     // Spawn movement loop as independent task so worker can handle next bot
     info!(

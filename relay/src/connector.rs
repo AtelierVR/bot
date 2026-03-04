@@ -268,9 +268,18 @@ impl QuicConnector {
                 .with_root_certificates(roots)
                 .with_no_client_auth()
         };
-        Ok(ClientConfig::new(Arc::new(
+        
+        // Enable QUIC datagrams for server broadcasts
+        let mut transport = quinn::TransportConfig::default();
+        transport.datagram_receive_buffer_size(Some(65536));  // 64KB buffer for datagrams
+        transport.datagram_send_buffer_size(65536);
+        
+        let mut client_config = ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?,
-        )))
+        ));
+        client_config.transport_config(Arc::new(transport));
+        
+        Ok(client_config)
     }
 }
 
