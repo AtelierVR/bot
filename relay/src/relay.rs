@@ -83,7 +83,7 @@ impl NoxRelay {
         if !self.running.load(Ordering::SeqCst) {
             return;
         }
-        
+
         loop {
             if !self.running.load(Ordering::SeqCst) {
                 break;
@@ -127,7 +127,6 @@ impl NoxRelay {
 
         // Check if it's a ServerConfig packet
         if type_byte == ResponseType::ServerConfig as u8 {
-            
             // Parse ServerConfig response
             let iid = buf.read_u8()?;
             let result = buf.read_u8()?;
@@ -380,9 +379,7 @@ impl NoxRelay {
         let challenge_resp = parse_auth_response(&challenge_resp_data).map_err(|e| anyhow!(e))?;
 
         let challenge = match challenge_resp {
-            AuthResponse::Challenge { challenge } => {
-                challenge
-            }
+            AuthResponse::Challenge { challenge } => challenge,
             AuthResponse::Error { result, reason, .. } => {
                 return Err(anyhow!(
                     "Challenge request failed: {:?} - {}",
@@ -408,16 +405,7 @@ impl NoxRelay {
         let resolve_resp = parse_auth_response(&resolve_resp_data).map_err(|e| anyhow!(e))?;
 
         match &resolve_resp {
-            AuthResponse::Success {
-                user_id,
-                address,
-                display_name,
-            } => {
-                info!(
-                    "Authentication successful: user={}@{} display=\"{}\"",
-                    user_id, address, display_name
-                );
-            }
+            AuthResponse::Success { user_id: _, address: _, display_name: _ } => {}
             AuthResponse::Error { result, reason, .. } => {
                 warn!("Authentication failed: {:?} - {}", result, reason);
             }
@@ -488,7 +476,11 @@ impl NoxRelay {
         let current_page = buf.read_u8()?; // current page: 1 byte
         let total_pages = buf.read_u8()?; // total pages: 1 byte
 
-        Ok(SessionResponse { instances, current_page, total_pages })
+        Ok(SessionResponse {
+            instances,
+            current_page,
+            total_pages,
+        })
     }
 
     /// Envoie une requête de déconnexion propre au serveur relay

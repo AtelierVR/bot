@@ -314,7 +314,6 @@ async fn create_bot(
 
     // Connect
     relay.connect().await.context("Failed to connect")?;
-    info!("[Bot {}] Connected", index);
 
     // Handshake
     let mut handshake_attempt = 0;
