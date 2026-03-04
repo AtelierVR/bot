@@ -1,6 +1,15 @@
 # Nox Bot
 
+[![Build and Test](https://github.com/AtelierVR/bot/actions/workflows/ci.yml/badge.svg)](https://github.com/AtelierVR/bot/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 Load testing bot for Nox relay servers, written in Rust.
+
+## Repository
+
+- **GitHub:** https://github.com/AtelierVR/bot
+- **Main branch:** `main` (stable releases)
+- **Development branch:** `development` (active development)
 
 ## Features
 
