@@ -96,8 +96,10 @@ impl RelayInstance {
         buffer.write_u8(self.id as u8); // Instance internal ID
         buffer.write_u8(request.action.as_u8());
 
-        if request.action == TravelingAction::Failed && request.reason.is_some() {
-            buffer.write_string(request.reason.as_ref().unwrap());
+        if request.action == TravelingAction::Failed {
+            if let Some(reason) = &request.reason {
+                buffer.write_string(reason);
+            }
         }
 
         let response = self
