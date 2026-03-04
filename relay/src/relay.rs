@@ -73,81 +73,47 @@ impl NoxRelay {
 
     /// Démarre l'écoute des broadcasts (datagrams) du serveur
     pub fn start_datagram_listener(self: &Arc<Self>) {
-        info!("Starting datagram listener task...");
         let relay = Arc::clone(self);
         tokio::spawn(async move {
-            info!("Datagram listener task spawned, entering loop...");
             relay.datagram_listener_loop().await;
         });
     }
 
     async fn datagram_listener_loop(&self) {
-        let running = self.running.load(Ordering::SeqCst);
-        info!("Datagram listener loop starting (running={})", running);
-        
-        if !running {
-            warn!("Datagram listener stopped immediately: relay not running");
+        if !self.running.load(Ordering::SeqCst) {
             return;
         }
         
-        let mut received_count = 0u64;
-        let mut loop_count = 0u64;
-        
         loop {
-            loop_count += 1;
-            
-            if loop_count % 50 == 1 {
-                info!("🔄 Datagram listener cycle {} (received: {})", loop_count, received_count);
-            }
-            
             if !self.running.load(Ordering::SeqCst) {
-                info!("Datagram listener stopping: relay not running (received {} total)", received_count);
                 break;
             }
 
-            // Get QUIC connector
-            debug!("Acquiring connector read lock...");
             let connector = self.connector.read().await;
-            debug!("Connector lock acquired");
-            
             let quic = match connector
                 .as_any()
                 .downcast_ref::<crate::connector::QuicConnector>()
             {
-                Some(q) => {
-                    debug!("QuicConnector downcast successful");
-                    q
-                },
-                None => {
-                    warn!("Datagram listener: connector is not QUIC, stopping");
-                    break;
-                }
+                Some(q) => q,
+                None => break,
             };
 
-            // Receive a datagram (blocks until one arrives or timeout)
-            debug!("Calling recv_datagram with 100ms timeout...");
             match tokio::time::timeout(Duration::from_millis(100), quic.recv_datagram()).await {
                 Ok(Ok(data)) => {
-                    received_count += 1;
-                    info!("📨 Datagram received: {} bytes (total: {})", data.len(), received_count);
-                    drop(connector); // Release lock before processing
+                    drop(connector);
                     if let Err(e) = self.process_datagram(&data).await {
                         warn!("Failed to process datagram: {}", e);
                     }
                 }
-                Ok(Err(e)) => {
+                Ok(Err(_e)) => {
                     drop(connector);
-                    warn!("Datagram receive error: {} (received {} total)", e, received_count);
                     break;
                 }
                 Err(_timeout) => {
-                    // Timeout - just check running flag and continue
                     drop(connector);
                 }
             }
         }
-        
-        info!("Datagram listener ended (received {} total)", received_count);
     }
 
     async fn process_datagram(&self, data: &[u8]) -> Result<()> {
@@ -161,7 +127,6 @@ impl NoxRelay {
 
         // Check if it's a ServerConfig packet
         if type_byte == ResponseType::ServerConfig as u8 {
-            info!("Received ServerConfig broadcast ({} bytes), parsing...", data.len());
             
             // Parse ServerConfig response
             let iid = buf.read_u8()?;

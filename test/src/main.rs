@@ -504,9 +504,7 @@ async fn create_bot(
         .await;
 
     // Start listening for server broadcasts
-    info!("[Bot {}] Starting datagram listener...", index);
     relay.start_datagram_listener();
-    info!("[Bot {}] Datagram listener started", index);
 
     // Spawn movement loop as independent task so worker can handle next bot
     info!(
@@ -516,7 +514,6 @@ async fn create_bot(
     let bot_task = tokio::spawn(async move {
         let mut tps = initial_tps;
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1000 / tps));
-        let mut tick_count = 0u64;
 
         loop {
             tokio::select! {
@@ -550,22 +547,6 @@ async fn create_bot(
                     if !relay.is_connected() {
                         warn!("[Bot {}] Relay disconnected, stopping movement loop", index);
                         break;
-                    }
-
-                    tick_count += 1;
-
-                    // Afficher le dernier ping toutes les 5 secondes environ (dépend du TPS)
-                    if tick_count.is_multiple_of(tps * 5) {
-                        if let Some(ping) = relay.get_last_ping().await {
-                            debug!(
-                                "[Bot {}] Latency: rtt={}ms (up≈{}ms, down≈{}ms) | TPS={}",
-                                index,
-                                ping.total(),
-                                ping.up(),
-                                ping.down(),
-                                tps
-                            );
-                        }
                     }
 
                     let dt = 1000.0 / tps as f32;
