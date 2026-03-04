@@ -111,9 +111,9 @@ impl NoxRelay {
                 }
             };
 
-            // Try to receive a datagram
-            match quic.recv_datagram().await {
-                Ok(Some(data)) => {
+            // Receive a datagram (blocks until one arrives or timeout)
+            match tokio::time::timeout(Duration::from_millis(100), quic.recv_datagram()).await {
+                Ok(Ok(data)) => {
                     received_count += 1;
                     debug!("Datagram received: {} bytes (total: {})", data.len(), received_count);
                     drop(connector); // Release lock before processing
@@ -121,15 +121,14 @@ impl NoxRelay {
                         warn!("Failed to process datagram: {}", e);
                     }
                 }
-                Ok(None) => {
-                    drop(connector);
-                    // No datagram available, sleep briefly
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                Err(e) => {
+                Ok(Err(e)) => {
                     drop(connector);
                     warn!("Datagram receive error: {} (received {} total)", e, received_count);
                     break;
+                }
+                Err(_timeout) => {
+                    // Timeout - just check running flag and continue
+                    drop(connector);
                 }
             }
         }

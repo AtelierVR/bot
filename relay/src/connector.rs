@@ -384,16 +384,13 @@ impl QuicConnector {
         }
     }
 
-    /// Receive a datagram (non-blocking).
-    /// Returns Ok(Some(data)) if datagram available, Ok(None) if no datagram.
-    pub async fn recv_datagram(&self) -> Result<Option<Vec<u8>>> {
+    /// Receive a datagram (blocking until one arrives).
+    /// Returns Ok(data) when a datagram is received, or Err on connection error.
+    pub async fn recv_datagram(&self) -> Result<Vec<u8>> {
         if let Some(ref conn) = self.connection {
             match conn.read_datagram().await {
-                Ok(data) => Ok(Some(data.to_vec())),
-                Err(quinn::ConnectionError::ApplicationClosed(_)) => {
-                    Err(anyhow::anyhow!("Connection closed"))
-                }
-                Err(_) => Ok(None),
+                Ok(data) => Ok(data.to_vec()),
+                Err(e) => Err(anyhow::anyhow!("Datagram read error: {}", e)),
             }
         } else {
             Err(anyhow::anyhow!("QUIC: not connected"))
