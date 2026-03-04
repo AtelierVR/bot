@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+pub mod node_discovery;
+
 #[derive(Debug, Clone)]
 pub struct Nox {
     base_url: String,
@@ -50,6 +52,25 @@ impl Nox {
             base_url: base_url.into(),
             client: reqwest::Client::new(),
         }
+    }
+
+    /// Create a new Nox client with automatic gateway discovery
+    ///
+    /// This will attempt to discover the node gateway from the provided address
+    /// using DNS TXT records and .well-known endpoints.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use noxapi::Nox;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = Nox::with_discovery("example.com").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn with_discovery(address: impl AsRef<str>) -> anyhow::Result<Self> {
+        let discovered = node_discovery::find_node_gateway(address.as_ref()).await?;
+        Ok(Self::new(discovered))
     }
 
     fn now() -> i64 {

@@ -3,7 +3,7 @@ use clap::Parser;
 use noxapi::Nox;
 use noxrelay::{
     AvatarChangeRequest, EnterFlags, EnterRequest, HandshakeRequest, NoxRelay, QuicConnector,
-    RelayInstance, SessionRequest, TcpConnector, TravelingAction, TravelingRequest, UdpConnector,
+    RelayInstance, SessionRequest, TravelingAction, TravelingRequest,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,13 +26,18 @@ struct Args {
     /// Custom config directory (default: ~/.local/share/.nox or %APPDATA%/.nox)
     #[arg(short, long)]
     config_dir: Option<PathBuf>,
-}
 
-fn get_env_or_default(key: &str, default: usize) -> usize {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+    /// Number of bots to create
+    #[arg(long, default_value = "64")]
+    count: usize,
+
+    /// Number of concurrent bot workers
+    #[arg(long, default_value = "1")]
+    concurrent: usize,
+
+    /// Delay in milliseconds between bot spawns
+    #[arg(long, default_value = "1000")]
+    delay: u64,
 }
 
 #[tokio::main]
@@ -75,10 +80,10 @@ async fn main() -> Result<()> {
         );
     }
 
-    // Create API client
-    let api_url = format!("https://nox.{}/", server);
-    info!("Connecting to API: {}", api_url);
-    let nox = Nox::new(&api_url);
+    // Create API client with automatic gateway discovery
+    let nox = Nox::with_discovery(server)
+        .await
+        .context("Failed to discover API gateway")?;
 
     // Get instance info
     info!("Fetching instance info...");
@@ -116,47 +121,25 @@ async fn main() -> Result<()> {
         .as_array()
         .context("No addresses found")?;
 
-    // Determine desired protocol via BOT_PROTOCOL env var (default: tcp)
-    let bot_protocol = std::env::var("BOT_PROTOCOL")
-        .unwrap_or_else(|_| "tcp".to_string())
-        .to_lowercase();
-    let scheme = match bot_protocol.as_str() {
-        "tcp" | "udp" | "quic" => bot_protocol.clone(),
-        other => {
-            error!(
-                "Unsupported BOT_PROTOCOL '{}'. Use tcp, udp, or quic.",
-                other
-            );
-            return Ok(());
-        }
-    };
-
+    // Filter QUIC addresses only
     let relay_addresses: Vec<String> = addresses
         .iter()
         .filter_map(|v| v.as_str())
-        .filter(|s| s.starts_with(&format!("{}://", scheme)))
+        .filter(|s| s.starts_with("quic://"))
         .map(|s| s.to_string())
         .collect();
 
     if relay_addresses.is_empty() {
-        error!("No {} relay addresses found", scheme.to_uppercase());
+        error!("No QUIC relay addresses found");
         return Ok(());
     }
 
-    info!(
-        "Using {} relay addresses ({})",
-        scheme.to_uppercase(),
-        relay_addresses.len()
-    );
+    info!("Using {} QUIC relay addresses", relay_addresses.len());
 
     // Bot creation parameters
-    let bot_count = get_env_or_default("BOT_COUNT", 64);
-    let concurrent_workers = get_env_or_default("CONCURRENT_BOTS", 10);
-    let bot_delay_ms = get_env_or_default("BOT_DELAY_MS", 100);
-
     info!(
         "Creating {} bots with {} concurrent workers ({}ms delay between spawns)...",
-        bot_count, concurrent_workers, bot_delay_ms
+        args.count, args.concurrent, args.delay
     );
 
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -172,12 +155,12 @@ async fn main() -> Result<()> {
         config_dir: Option<PathBuf>,
     }
 
-    let (tx, rx) = mpsc::channel::<BotCommand>(bot_count);
+    let (tx, rx) = mpsc::channel::<BotCommand>(args.count);
     let rx = Arc::new(tokio::sync::Mutex::new(rx));
 
     // Spawn workers that consume from the queue
     let mut worker_handles = Vec::new();
-    for worker_id in 0..concurrent_workers {
+    for worker_id in 0..args.concurrent {
         let rx = rx.clone();
         let shutdown_flag = shutdown.clone();
         let active_bots_ref = active_bots.clone();
@@ -223,6 +206,8 @@ async fn main() -> Result<()> {
     // Enqueue all bot creation commands with delay
     let tx_clone = tx.clone();
     let config_dir_clone = args.config_dir.clone();
+    let bot_count = args.count;
+    let bot_delay = args.delay;
     let producer = tokio::spawn(async move {
         for i in 0..bot_count {
             let relay_addr = relay_addresses[i % relay_addresses.len()].clone();
@@ -243,7 +228,7 @@ async fn main() -> Result<()> {
             }
 
             // Delay between each bot enqueue
-            tokio::time::sleep(tokio::time::Duration::from_millis(bot_delay_ms as u64)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(bot_delay)).await;
         }
 
         info!("All {} bots enqueued", bot_count);
@@ -303,22 +288,13 @@ async fn create_bot(
     let url = Url::parse(relay_addr).context("Invalid relay address")?;
     let host = url.host_str().context("No host in URL")?.to_string();
     let port = url.port().context("No port in URL")?;
-    let scheme = url.scheme();
 
     info!(
-        "[Bot {}] Connecting via {} to {}:{}...",
-        index,
-        scheme.to_uppercase(),
-        host,
-        port
+        "[Bot {}] Connecting via QUIC to {}:{}...",
+        index, host, port
     );
 
-    let connector: Box<dyn noxrelay::Connector> = match scheme {
-        "tcp" => Box::new(TcpConnector::new(host, port)),
-        "udp" => Box::new(UdpConnector::new(host, port)),
-        "quic" => Box::new(QuicConnector::new(host, port)),
-        other => anyhow::bail!("Unsupported relay scheme: {}", other),
-    };
+    let connector = Box::new(QuicConnector::new(host, port));
     let relay = Arc::new(NoxRelay::new(connector));
 
     // Connect
