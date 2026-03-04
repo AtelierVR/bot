@@ -65,7 +65,7 @@ impl RelayInstance {
 
         if result == 0 {
             // Success
-            let player_flags = buf.read_u32()?;
+            let _player_flags = buf.read_u32()?;
             let player_id = buf.read_u16()?;
             let _user_id = buf.read_u32()?;
             let _user_address = buf.read_string()?;

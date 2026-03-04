@@ -16,8 +16,10 @@ use tracing::{debug, info, warn};
 
 pub struct NoxRelay {
     connector: Arc<RwLock<Box<dyn Connector>>>,
+    #[allow(dead_code)]
     event_tx: mpsc::UnboundedSender<RelayEvent>,
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<RelayEvent>>>,
+    #[allow(dead_code)]
     pending_responses: Arc<RwLock<HashMap<u16, tokio::sync::oneshot::Sender<Vec<u8>>>>>,
     counter: Arc<Mutex<u16>>,
     running: Arc<AtomicBool>,

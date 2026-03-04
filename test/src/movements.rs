@@ -4,6 +4,7 @@ use nox_relay::{Quaternion, RelayInstance, Transform, TransformRequest, Transfor
 #[async_trait]
 pub trait Movement: Send + Sync {
     fn name(&self) -> &str;
+    #[allow(dead_code)]
     fn description(&self) -> &str;
     fn initialize(&self, index: usize) -> MovementState;
     async fn update(&self, state: &mut MovementState, dt: f32, instance: &RelayInstance);
@@ -13,9 +14,11 @@ pub trait Movement: Send + Sync {
 pub struct MovementState {
     pub position: Vector3,
     pub rotation: Quaternion,
+    #[allow(dead_code)]
     pub velocity: Vector3,
     pub time: f32,
     pub player_id: u16,
+    #[allow(dead_code)]
     pub custom_data: std::collections::HashMap<String, f64>,
 }
 

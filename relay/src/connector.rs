@@ -314,7 +314,7 @@ impl Connector for QuicConnector {
         }
     }
 
-    async fn receive(&self, buf: &mut [u8]) -> Result<usize> {
+    async fn receive(&self, _buf: &mut [u8]) -> Result<usize> {
         // This method is no longer used in QUIC mode since each request/response
         // happens on its own stream
         Err(anyhow::anyhow!(
@@ -354,13 +354,8 @@ impl QuicConnector {
             // Read the response
             let mut response = Vec::new();
             let mut buf = vec![0u8; 65536];
-            loop {
-                match recv.read(&mut buf).await? {
-                    Some(n) => {
-                        response.extend_from_slice(&buf[..n]);
-                    }
-                    None => break, // Stream finished
-                }
+            while let Some(n) = recv.read(&mut buf).await? {
+                response.extend_from_slice(&buf[..n]);
             }
 
             Ok(response)

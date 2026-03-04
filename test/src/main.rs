@@ -63,10 +63,7 @@ async fn main() -> Result<()> {
         .context("Failed to parse instance ID")?;
     let server = instance_parts[1];
 
-    info!(
-        "Target instance: {} (server: {})",
-        instance_id, server
-    );
+    info!("Target instance: {} (server: {})", instance_id, server);
 
     // Display config directory
     if let Some(ref config_dir) = args.config_dir {
@@ -513,7 +510,7 @@ async fn create_bot(
             tick_count += 1;
 
             // Afficher le dernier ping toutes les 5 secondes environ (dépend du TPS)
-            if tick_count % (tps * 5) == 0 {
+            if tick_count.is_multiple_of(tps * 5) {
                 if let Some(ping) = relay.get_last_ping().await {
                     debug!(
                         "[Bot {}] Latency: up={}ms, down={}ms, total={}ms",
