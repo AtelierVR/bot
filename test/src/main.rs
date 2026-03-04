@@ -504,16 +504,25 @@ async fn create_bot(
             tick_count += 1;
             config_check_counter += 1;
 
-            // Check for TPS updates every 5 seconds
-            if config_check_counter >= tps * 5 {
+            // Check for TPS updates every 15 seconds (reduced from 5s to avoid overhead)
+            if config_check_counter >= tps * 15 {
                 config_check_counter = 0;
                 match instance.get_server_config().await {
                     Ok(config) => {
                         if let Some(new_tps) = config.tps {
                             if new_tps as u64 != tps {
+                                let lb_status = if config.load_balancing_enabled.unwrap_or(false) {
+                                    format!(
+                                        "enabled (min={}, max={})",
+                                        config.min_tps.unwrap_or(5),
+                                        config.max_tps.unwrap_or(20)
+                                    )
+                                } else {
+                                    "disabled".to_string()
+                                };
                                 info!(
-                                    "[Bot {}] TPS updated: {} -> {} (adaptive load balancing)",
-                                    index, tps, new_tps
+                                    "[Bot {}] TPS updated: {} -> {} | Load balancing: {}",
+                                    index, tps, new_tps, lb_status
                                 );
                                 tps = new_tps as u64;
                                 // Recreate interval with new TPS

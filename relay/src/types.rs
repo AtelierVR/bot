@@ -27,13 +27,16 @@ bitflags! {
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ServerConfigFlags: u8 {
-        const NONE      = 0x00;
-        const TPS       = 0x01;
-        const THRESHOLD = 0x02;
-        const CAPACITY  = 0x04;
-        const PASSWORD  = 0x08;
-        const FLAGS     = 0x10;
-        const ALL       = 0x1F;
+        const NONE                  = 0x00;
+        const TPS                   = 0x01;
+        const THRESHOLD             = 0x02;
+        const CAPACITY              = 0x04;
+        const PASSWORD              = 0x08;
+        const FLAGS                 = 0x10;
+        const MIN_TPS               = 0x20;
+        const MAX_TPS               = 0x40;
+        const LOAD_BALANCING        = 0x80;
+        const ALL                   = 0xFF;
     }
 }
 
@@ -131,6 +134,9 @@ pub struct ServerConfigResponse {
     pub capacity: Option<u16>,
     pub has_password: Option<bool>,
     pub instance_flags: Option<u32>,
+    pub min_tps: Option<u8>,
+    pub max_tps: Option<u8>,
+    pub load_balancing_enabled: Option<bool>,
 }
 
 #[repr(u8)]

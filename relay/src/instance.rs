@@ -320,6 +320,9 @@ impl RelayInstance {
         let mut capacity = None;
         let mut has_password = None;
         let mut instance_flags = None;
+        let mut min_tps = None;
+        let mut max_tps = None;
+        let mut load_balancing_enabled = None;
 
         if flags.contains(ServerConfigFlags::TPS) {
             tps = Some(buf.read_u8()?);
@@ -335,6 +338,15 @@ impl RelayInstance {
         }
         if flags.contains(ServerConfigFlags::PASSWORD) {
             has_password = Some(buf.read_u8()? != 0);
+        }
+        if flags.contains(ServerConfigFlags::MIN_TPS) {
+            min_tps = Some(buf.read_u8()?);
+        }
+        if flags.contains(ServerConfigFlags::MAX_TPS) {
+            max_tps = Some(buf.read_u8()?);
+        }
+        if flags.contains(ServerConfigFlags::LOAD_BALANCING) {
+            load_balancing_enabled = Some(buf.read_u8()? != 0);
         }
 
         // Update current values if received
@@ -353,6 +365,9 @@ impl RelayInstance {
             capacity,
             has_password,
             instance_flags,
+            min_tps,
+            max_tps,
+            load_balancing_enabled,
         })
     }
 }
