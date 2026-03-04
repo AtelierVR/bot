@@ -461,19 +461,23 @@ async fn create_bot(
         bot_player_id
     );
 
-    // Get tps for movement
-    let tps = if let noxrelay::EnterResponse::Success { tps, .. } = enter_response {
+    // Get initial tps for movement
+    let initial_tps = if let noxrelay::EnterResponse::Success { tps, .. } = enter_response {
         tps as u64
     } else {
         20
     };
 
     // Spawn movement loop as independent task so worker can handle next bot
-    info!("[Bot {}] Spawning movement loop task", index);
+    info!(
+        "[Bot {}] Spawning movement loop task with initial TPS={}",
+        index, initial_tps
+    );
     let bot_task = tokio::spawn(async move {
-        let dt = 1000.0 / tps as f32;
+        let mut tps = initial_tps;
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1000 / tps));
         let mut tick_count = 0u64;
+        let mut config_check_counter = 0u64;
 
         loop {
             // Check shutdown flag
@@ -498,20 +502,49 @@ async fn create_bot(
 
             interval.tick().await;
             tick_count += 1;
+            config_check_counter += 1;
+
+            // Check for TPS updates every 5 seconds
+            if config_check_counter >= tps * 5 {
+                config_check_counter = 0;
+                match instance.get_server_config().await {
+                    Ok(config) => {
+                        if let Some(new_tps) = config.tps {
+                            if new_tps as u64 != tps {
+                                info!(
+                                    "[Bot {}] TPS updated: {} -> {} (adaptive load balancing)",
+                                    index, tps, new_tps
+                                );
+                                tps = new_tps as u64;
+                                // Recreate interval with new TPS
+                                interval = tokio::time::interval(
+                                    tokio::time::Duration::from_millis(1000 / tps),
+                                );
+                                config_check_counter = 0;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!("[Bot {}] Failed to fetch server config: {}", index, e);
+                    }
+                }
+            }
 
             // Afficher le dernier ping toutes les 5 secondes environ (dépend du TPS)
             if tick_count.is_multiple_of(tps * 5) {
                 if let Some(ping) = relay.get_last_ping().await {
                     debug!(
-                        "[Bot {}] Latency: rtt={}ms (up≈{}ms, down≈{}ms)",
+                        "[Bot {}] Latency: rtt={}ms (up≈{}ms, down≈{}ms) | TPS={}",
                         index,
                         ping.total(),
                         ping.up(),
-                        ping.down()
+                        ping.down(),
+                        tps
                     );
                 }
             }
 
+            let dt = 1000.0 / tps as f32;
             movement.update(&mut movement_state, dt, &instance).await;
         }
     });

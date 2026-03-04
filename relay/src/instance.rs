@@ -3,12 +3,17 @@ use crate::relay::NoxRelay;
 use crate::types::*;
 use anyhow::Result;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 pub struct RelayInstance {
     pub id: u64,
     pub master: u64,
     pub name: String,
     relay: Arc<NoxRelay>,
+    /// Current TPS (updated from ServerConfig)
+    current_tps: Arc<RwLock<u8>>,
+    /// Current threshold (updated from ServerConfig)
+    current_threshold: Arc<RwLock<f32>>,
 }
 
 impl RelayInstance {
@@ -18,7 +23,19 @@ impl RelayInstance {
             master: info.master,
             name: info.name,
             relay,
+            current_tps: Arc::new(RwLock::new(20)),
+            current_threshold: Arc::new(RwLock::new(0.01)),
         }
+    }
+
+    /// Get the current TPS
+    pub async fn get_current_tps(&self) -> u8 {
+        *self.current_tps.read().await
+    }
+
+    /// Get the current threshold
+    pub async fn get_current_threshold(&self) -> f32 {
+        *self.current_threshold.read().await
     }
 
     pub async fn enter(&self, request: EnterRequest) -> Result<EnterResponse> {
@@ -72,8 +89,12 @@ impl RelayInstance {
             let _display = buf.read_string()?;
             let _created_at = buf.read_i64()?;
             let tps = buf.read_u8()?;
-            let _threshold = buf.read_f32()?;
+            let threshold = buf.read_f32()?;
             let entity_id = buf.read_f32()? as u16;
+
+            // Update current TPS and threshold
+            *self.current_tps.write().await = tps;
+            *self.current_threshold.write().await = threshold;
 
             Ok(EnterResponse::Success {
                 player_id,
@@ -262,5 +283,76 @@ impl RelayInstance {
             .await?;
 
         Ok(())
+    }
+
+    /// Query current server configuration (TPS, threshold, capacity, etc.)
+    /// When flags is NONE (0x00), the server returns all current values.
+    pub async fn get_server_config(&self) -> Result<ServerConfigResponse> {
+        let mut buffer = Buffer::new();
+        buffer.write_u8(self.id as u8); // Instance internal ID
+        buffer.write_u8(ServerConfigFlags::NONE.bits()); // Query all settings
+
+        let response = self
+            .relay
+            .request_internal(
+                crate::protocol::RequestType::ServerConfig,
+                crate::protocol::ResponseType::ServerConfig,
+                buffer.as_slice(),
+                5000,
+            )
+            .await?;
+
+        let mut buf = Buffer::from_vec(response);
+        let iid = buf.read_u8()?;
+        let result = buf.read_u8()?;
+        let flags_byte = buf.read_u8()?;
+        let flags = ServerConfigFlags::from_bits_truncate(flags_byte);
+
+        let result_enum = match result {
+            0 => ServerConfigResult::Success,
+            1 => ServerConfigResult::Failure,
+            2 => ServerConfigResult::Change,
+            _ => ServerConfigResult::Failure,
+        };
+
+        let mut tps = None;
+        let mut threshold = None;
+        let mut capacity = None;
+        let mut has_password = None;
+        let mut instance_flags = None;
+
+        if flags.contains(ServerConfigFlags::TPS) {
+            tps = Some(buf.read_u8()?);
+        }
+        if flags.contains(ServerConfigFlags::THRESHOLD) {
+            threshold = Some(buf.read_f32()?);
+        }
+        if flags.contains(ServerConfigFlags::CAPACITY) {
+            capacity = Some(buf.read_u16()?);
+        }
+        if flags.contains(ServerConfigFlags::FLAGS) {
+            instance_flags = Some(buf.read_u32()?);
+        }
+        if flags.contains(ServerConfigFlags::PASSWORD) {
+            has_password = Some(buf.read_u8()? != 0);
+        }
+
+        // Update current values if received
+        if let Some(t) = tps {
+            *self.current_tps.write().await = t;
+        }
+        if let Some(th) = threshold {
+            *self.current_threshold.write().await = th;
+        }
+
+        Ok(ServerConfigResponse {
+            instance_id: iid,
+            result: result_enum,
+            tps,
+            threshold,
+            capacity,
+            has_password,
+            instance_flags,
+        })
     }
 }

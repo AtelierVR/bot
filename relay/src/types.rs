@@ -24,6 +24,19 @@ bitflags! {
     }
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ServerConfigFlags: u8 {
+        const NONE      = 0x00;
+        const TPS       = 0x01;
+        const THRESHOLD = 0x02;
+        const CAPACITY  = 0x04;
+        const PASSWORD  = 0x08;
+        const FLAGS     = 0x10;
+        const ALL       = 0x1F;
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TravelingAction {
@@ -96,6 +109,36 @@ pub struct HandshakeResponse {
 #[derive(Debug, Clone)]
 pub struct DisconnectRequest {
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerConfigRequest {
+    pub instance_id: u8,
+    pub flags: ServerConfigFlags,
+    pub tps: Option<u8>,
+    pub threshold: Option<f32>,
+    pub capacity: Option<u16>,
+    pub password: Option<String>,
+    pub instance_flags: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerConfigResponse {
+    pub instance_id: u8,
+    pub result: ServerConfigResult,
+    pub tps: Option<u8>,
+    pub threshold: Option<f32>,
+    pub capacity: Option<u16>,
+    pub has_password: Option<bool>,
+    pub instance_flags: Option<u32>,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerConfigResult {
+    Success = 0,
+    Failure = 1,
+    Change = 2,
 }
 
 #[derive(Debug, Clone)]
