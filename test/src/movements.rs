@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use nox_relay::{Quaternion, RelayInstance, Transform, TransformRequest, TransformType, Vector3};
+use noxrelay::{Quaternion, RelayInstance, Transform, TransformRequest, TransformType, Vector3};
 
 #[async_trait]
 pub trait Movement: Send + Sync {

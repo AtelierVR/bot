@@ -914,7 +914,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nox-api"
+name = "noxapi"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -926,7 +926,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "nox-relay"
+name = "noxbot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.21.7",
+ "clap",
+ "noxapi",
+ "noxrelay",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "noxrelay"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -949,25 +968,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "url",
-]
-
-[[package]]
-name = "noxbot"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.21.7",
- "clap",
- "nox-api",
- "nox-relay",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
  "url",
 ]
 

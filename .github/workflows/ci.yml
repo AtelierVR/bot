@@ -55,7 +55,7 @@ jobs:
         with:
           name: noxbot-${{ runner.os }}-${{ github.sha }}
           path: |
-            target/release/noxbot${{ runner.os == 'Windows-latest' && '.exe' || '' }}
+            target/release/noxbot${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 7
 

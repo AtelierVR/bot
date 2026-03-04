@@ -10,8 +10,8 @@ name = "noxbot"
 path = "src/main.rs"
 
 [dependencies]
-nox-api = { path = "../api" }
-nox-relay = { path = "../relay" }
+noxapi = { path = "../api" }
+noxrelay = { path = "../relay" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

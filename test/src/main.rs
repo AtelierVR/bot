@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use nox_api::Nox;
-use nox_relay::{
+use noxapi::Nox;
+use noxrelay::{
     AvatarChangeRequest, EnterFlags, EnterRequest, HandshakeRequest, NoxRelay, QuicConnector,
     RelayInstance, SessionRequest, TcpConnector, TravelingAction, TravelingRequest, UdpConnector,
 };
@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
     } else {
         info!(
             "Using default config directory: {:?}",
-            nox_relay::NoxCredentials::nox_folder(None)
+            noxrelay::NoxCredentials::nox_folder(None)
         );
     }
 
@@ -313,7 +313,7 @@ async fn create_bot(
         port
     );
 
-    let connector: Box<dyn nox_relay::Connector> = match scheme {
+    let connector: Box<dyn noxrelay::Connector> = match scheme {
         "tcp" => Box::new(TcpConnector::new(host, port)),
         "udp" => Box::new(UdpConnector::new(host, port)),
         "quic" => Box::new(QuicConnector::new(host, port)),
@@ -364,7 +364,7 @@ async fn create_bot(
     info!("[Bot {}] Keep-alive started", index);
 
     // Authentification
-    match nox_relay::NoxCredentials::load(config_dir) {
+    match noxrelay::NoxCredentials::load(config_dir) {
         Ok(credentials) => {
             info!(
                 "[Bot {}] Credentials loaded: user_id={} server={}",
@@ -445,8 +445,7 @@ async fn create_bot(
     info!("[Bot {}] Traveling complete", index);
 
     // Change avatar and extract player_id
-    let bot_player_id = if let nox_relay::EnterResponse::Success { player_id, .. } = enter_response
-    {
+    let bot_player_id = if let noxrelay::EnterResponse::Success { player_id, .. } = enter_response {
         instance
             .change_avatar(AvatarChangeRequest {
                 player_id,
@@ -472,7 +471,7 @@ async fn create_bot(
     );
 
     // Get tps for movement
-    let tps = if let nox_relay::EnterResponse::Success { tps, .. } = enter_response {
+    let tps = if let noxrelay::EnterResponse::Success { tps, .. } = enter_response {
         tps as u64
     } else {
         20
