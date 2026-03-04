@@ -14,6 +14,21 @@ use url::Url;
 
 mod movements;
 
+/// Get the platform name based on the OS
+fn get_platform() -> &'static str {
+    #[cfg(target_os = "windows")]
+    return "windows";
+
+    #[cfg(target_os = "linux")]
+    return "linux";
+
+    #[cfg(target_os = "macos")]
+    return "macos";
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    return "unknown";
+}
+
 /// Nox bot load testing tool
 #[derive(Parser, Debug)]
 #[command(name = "noxbot")]
@@ -308,8 +323,8 @@ async fn create_bot(
         match relay
             .handshake(HandshakeRequest {
                 protocol: 0x0001,
-                engine: "rust".to_string(),
-                platform: "windows".to_string(),
+                engine: "noxbot".to_string(),
+                platform: get_platform().to_string(),
             })
             .await
         {
