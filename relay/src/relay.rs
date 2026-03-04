@@ -25,6 +25,8 @@ pub struct NoxRelay {
     running: Arc<AtomicBool>,
     keep_alive_interval: Arc<Mutex<u64>>,
     last_ping: Arc<Mutex<Option<LatencyResponse>>>,
+    /// Callback for ServerConfig broadcasts
+    server_config_callback: Arc<RwLock<Option<Arc<dyn Fn(ServerConfigResponse) + Send + Sync>>>>,
 }
 
 impl NoxRelay {
@@ -39,7 +41,16 @@ impl NoxRelay {
             running: Arc::new(AtomicBool::new(false)),
             keep_alive_interval: Arc::new(Mutex::new(5000)),
             last_ping: Arc::new(Mutex::new(None)),
+            server_config_callback: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set a callback that will be called when ServerConfig broadcast is received
+    pub async fn set_server_config_callback<F>(&self, callback: F)
+    where
+        F: Fn(ServerConfigResponse) + Send + Sync + 'static,
+    {
+        *self.server_config_callback.write().await = Some(Arc::new(callback));
     }
 
     pub async fn connect(&self) -> Result<()> {
@@ -58,6 +69,142 @@ impl NoxRelay {
         tokio::spawn(async move {
             relay.keep_alive_loop().await;
         });
+    }
+
+    /// Démarre l'écoute des broadcasts (datagrams) du serveur
+    pub fn start_datagram_listener(self: &Arc<Self>) {
+        let relay = Arc::clone(self);
+        tokio::spawn(async move {
+            relay.datagram_listener_loop().await;
+        });
+    }
+
+    async fn datagram_listener_loop(&self) {
+        debug!("Datagram listener started");
+        
+        loop {
+            if !self.running.load(Ordering::SeqCst) {
+                debug!("Datagram listener stopping: relay not running");
+                break;
+            }
+
+            // Get QUIC connector
+            let connector = self.connector.read().await;
+            let quic = match connector
+                .as_any()
+                .downcast_ref::<crate::connector::QuicConnector>()
+            {
+                Some(q) => q,
+                None => {
+                    warn!("Datagram listener: connector is not QUIC, stopping");
+                    break;
+                }
+            };
+
+            // Try to receive a datagram
+            match quic.recv_datagram().await {
+                Ok(Some(data)) => {
+                    drop(connector); // Release lock before processing
+                    if let Err(e) = self.process_datagram(&data).await {
+                        debug!("Failed to process datagram: {}", e);
+                    }
+                }
+                Ok(None) => {
+                    drop(connector);
+                    // No datagram available, sleep briefly
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(e) => {
+                    drop(connector);
+                    warn!("Datagram receive error: {}", e);
+                    break;
+                }
+            }
+        }
+        
+        debug!("Datagram listener ended");
+    }
+
+    async fn process_datagram(&self, data: &[u8]) -> Result<()> {
+        if data.len() < 3 {
+            return Err(anyhow!("Datagram too short"));
+        }
+
+        let mut buf = Buffer::from_vec(data.to_vec());
+        let _uid = buf.read_u16()?;
+        let type_byte = buf.read_u8()?;
+
+        // Check if it's a ServerConfig packet
+        if type_byte == ResponseType::ServerConfig as u8 {
+            debug!("Received ServerConfig broadcast, parsing...");
+            
+            // Parse ServerConfig response
+            let iid = buf.read_u8()?;
+            let result = buf.read_u8()?;
+            let flags_byte = buf.read_u8()?;
+            let flags = ServerConfigFlags::from_bits_truncate(flags_byte);
+
+            let result_enum = match result {
+                0 => ServerConfigResult::Success,
+                1 => ServerConfigResult::Failure,
+                2 => ServerConfigResult::Change,
+                _ => ServerConfigResult::Failure,
+            };
+
+            let mut tps = None;
+            let mut threshold = None;
+            let mut capacity = None;
+            let mut has_password = None;
+            let mut instance_flags = None;
+            let mut min_tps = None;
+            let mut max_tps = None;
+            let mut load_balancing_enabled = None;
+
+            if flags.contains(ServerConfigFlags::TPS) {
+                tps = Some(buf.read_u8()?);
+            }
+            if flags.contains(ServerConfigFlags::THRESHOLD) {
+                threshold = Some(buf.read_f32()?);
+            }
+            if flags.contains(ServerConfigFlags::CAPACITY) {
+                capacity = Some(buf.read_u16()?);
+            }
+            if flags.contains(ServerConfigFlags::FLAGS) {
+                instance_flags = Some(buf.read_u32()?);
+            }
+            if flags.contains(ServerConfigFlags::PASSWORD) {
+                has_password = Some(buf.read_u8()? != 0);
+            }
+            if flags.contains(ServerConfigFlags::MIN_TPS) {
+                min_tps = Some(buf.read_u8()?);
+            }
+            if flags.contains(ServerConfigFlags::MAX_TPS) {
+                max_tps = Some(buf.read_u8()?);
+            }
+            if flags.contains(ServerConfigFlags::LOAD_BALANCING) {
+                load_balancing_enabled = Some(buf.read_u8()? != 0);
+            }
+
+            let response = ServerConfigResponse {
+                instance_id: iid,
+                result: result_enum,
+                tps,
+                threshold,
+                capacity,
+                has_password,
+                instance_flags,
+                min_tps,
+                max_tps,
+                load_balancing_enabled,
+            };
+
+            // Call the callback if set
+            if let Some(callback) = self.server_config_callback.read().await.as_ref() {
+                callback(response);
+            }
+        }
+
+        Ok(())
     }
 
     async fn keep_alive_loop(&self) {

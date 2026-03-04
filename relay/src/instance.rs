@@ -3,8 +3,9 @@ use crate::relay::NoxRelay;
 use crate::types::*;
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 
+#[derive(Clone)]
 pub struct RelayInstance {
     pub id: u64,
     pub master: u64,
@@ -14,6 +15,8 @@ pub struct RelayInstance {
     current_tps: Arc<RwLock<u8>>,
     /// Current threshold (updated from ServerConfig)
     current_threshold: Arc<RwLock<f32>>,
+    /// Channel to notify TPS changes
+    tps_change_tx: Arc<RwLock<Option<mpsc::UnboundedSender<u8>>>>,
 }
 
 impl RelayInstance {
@@ -25,6 +28,40 @@ impl RelayInstance {
             relay,
             current_tps: Arc::new(RwLock::new(20)),
             current_threshold: Arc::new(RwLock::new(0.01)),
+            tps_change_tx: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Set a callback channel that will be notified when TPS changes
+    pub async fn set_tps_change_listener(&self, tx: mpsc::UnboundedSender<u8>) {
+        *self.tps_change_tx.write().await = Some(tx);
+    }
+
+    /// Update TPS from a ServerConfig broadcast
+    pub async fn update_tps_from_broadcast(&self, new_tps: u8) -> bool {
+        let mut tps = self.current_tps.write().await;
+        if *tps != new_tps {
+            *tps = new_tps;
+            
+            // Notify listener if set
+            if let Some(tx) = self.tps_change_tx.read().await.as_ref() {
+                let _ = tx.send(new_tps);
+            }
+            
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Update threshold from a ServerConfig broadcast
+    pub async fn update_threshold_from_broadcast(&self, new_threshold: f32) -> bool {
+        let mut threshold = self.current_threshold.write().await;
+        if (*threshold - new_threshold).abs() > 0.001 {
+            *threshold = new_threshold;
+            true
+        } else {
+            false
         }
     }
 

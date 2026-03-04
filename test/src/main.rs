@@ -468,6 +468,44 @@ async fn create_bot(
         20
     };
 
+    // Create channel for TPS updates
+    let (tps_tx, mut tps_rx) = tokio::sync::mpsc::unbounded_channel();
+    instance.set_tps_change_listener(tps_tx).await;
+
+    // Set up ServerConfig broadcast listener
+    let instance_clone = instance.clone();
+    relay
+        .set_server_config_callback(move |config| {
+            let instance = instance_clone.clone();
+            tokio::spawn(async move {
+                if let Some(new_tps) = config.tps {
+                    let changed = instance.update_tps_from_broadcast(new_tps).await;
+                    if changed {
+                        info!(
+                            "[Bot] TPS updated via broadcast: {} | Load balancing: {}",
+                            new_tps,
+                            if config.load_balancing_enabled.unwrap_or(false) {
+                                format!(
+                                    "enabled (min={}, max={})",
+                                    config.min_tps.unwrap_or(5),
+                                    config.max_tps.unwrap_or(20)
+                                )
+                            } else {
+                                "disabled".to_string()
+                            }
+                        );
+                    }
+                }
+                if let Some(new_threshold) = config.threshold {
+                    instance.update_threshold_from_broadcast(new_threshold).await;
+                }
+            });
+        })
+        .await;
+
+    // Start listening for server broadcasts
+    relay.start_datagram_listener();
+
     // Spawn movement loop as independent task so worker can handle next bot
     info!(
         "[Bot {}] Spawning movement loop task with initial TPS={}",
@@ -477,84 +515,61 @@ async fn create_bot(
         let mut tps = initial_tps;
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1000 / tps));
         let mut tick_count = 0u64;
-        let mut config_check_counter = 0u64;
 
         loop {
-            // Check shutdown flag
-            if shutdown.load(Ordering::Relaxed) {
-                info!("[Bot {}] Shutting down gracefully...", index);
-                // Déconnexion propre avant fermeture
-                if let Err(e) = relay
-                    .disconnect(Some("Shutdown requested".to_string()))
-                    .await
-                {
-                    warn!("[Bot {}] Disconnect error: {}", index, e);
+            tokio::select! {
+                // Check for TPS updates from broadcasts
+                Some(new_tps) = tps_rx.recv() => {
+                    if new_tps as u64 != tps {
+                        info!("[Bot {}] TPS changed: {} -> {} (via broadcast)", index, tps, new_tps);
+                        tps = new_tps as u64;
+                        // Recreate interval with new TPS
+                        interval = tokio::time::interval(tokio::time::Duration::from_millis(1000 / tps));
+                    }
                 }
-                let _ = relay.close().await;
-                break;
-            }
 
-            // Vérifier si le relay est toujours connecté
-            if !relay.is_connected() {
-                warn!("[Bot {}] Relay disconnected, stopping movement loop", index);
-                break;
-            }
+                // Normal tick
+                _ = interval.tick() => {
+                    // Check shutdown flag
+                    if shutdown.load(Ordering::Relaxed) {
+                        info!("[Bot {}] Shutting down gracefully...", index);
+                        // Déconnexion propre avant fermeture
+                        if let Err(e) = relay
+                            .disconnect(Some("Shutdown requested".to_string()))
+                            .await
+                        {
+                            warn!("[Bot {}] Disconnect error: {}", index, e);
+                        }
+                        let _ = relay.close().await;
+                        break;
+                    }
 
-            interval.tick().await;
-            tick_count += 1;
-            config_check_counter += 1;
+                    // Vérifier si le relay est toujours connecté
+                    if !relay.is_connected() {
+                        warn!("[Bot {}] Relay disconnected, stopping movement loop", index);
+                        break;
+                    }
 
-            // Check for TPS updates every 15 seconds (reduced from 5s to avoid overhead)
-            if config_check_counter >= tps * 15 {
-                config_check_counter = 0;
-                match instance.get_server_config().await {
-                    Ok(config) => {
-                        if let Some(new_tps) = config.tps {
-                            if new_tps as u64 != tps {
-                                let lb_status = if config.load_balancing_enabled.unwrap_or(false) {
-                                    format!(
-                                        "enabled (min={}, max={})",
-                                        config.min_tps.unwrap_or(5),
-                                        config.max_tps.unwrap_or(20)
-                                    )
-                                } else {
-                                    "disabled".to_string()
-                                };
-                                info!(
-                                    "[Bot {}] TPS updated: {} -> {} | Load balancing: {}",
-                                    index, tps, new_tps, lb_status
-                                );
-                                tps = new_tps as u64;
-                                // Recreate interval with new TPS
-                                interval = tokio::time::interval(
-                                    tokio::time::Duration::from_millis(1000 / tps),
-                                );
-                                config_check_counter = 0;
-                            }
+                    tick_count += 1;
+
+                    // Afficher le dernier ping toutes les 5 secondes environ (dépend du TPS)
+                    if tick_count.is_multiple_of(tps * 5) {
+                        if let Some(ping) = relay.get_last_ping().await {
+                            debug!(
+                                "[Bot {}] Latency: rtt={}ms (up≈{}ms, down≈{}ms) | TPS={}",
+                                index,
+                                ping.total(),
+                                ping.up(),
+                                ping.down(),
+                                tps
+                            );
                         }
                     }
-                    Err(e) => {
-                        debug!("[Bot {}] Failed to fetch server config: {}", index, e);
-                    }
+
+                    let dt = 1000.0 / tps as f32;
+                    movement.update(&mut movement_state, dt, &instance).await;
                 }
             }
-
-            // Afficher le dernier ping toutes les 5 secondes environ (dépend du TPS)
-            if tick_count.is_multiple_of(tps * 5) {
-                if let Some(ping) = relay.get_last_ping().await {
-                    debug!(
-                        "[Bot {}] Latency: rtt={}ms (up≈{}ms, down≈{}ms) | TPS={}",
-                        index,
-                        ping.total(),
-                        ping.up(),
-                        ping.down(),
-                        tps
-                    );
-                }
-            }
-
-            let dt = 1000.0 / tps as f32;
-            movement.update(&mut movement_state, dt, &instance).await;
         }
     });
 
