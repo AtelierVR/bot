@@ -57,4 +57,4 @@ MOVEMENT_TYPE=circular
 
 ## License
 
-MIT
+AGPLv3 - See [LICENSE](LICENSE) file for details.
