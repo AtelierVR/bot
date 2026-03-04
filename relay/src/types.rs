@@ -109,21 +109,25 @@ pub struct LatencyRequest;
 #[derive(Debug, Clone)]
 pub struct LatencyResponse {
     pub initial: i64,
-    pub intermediate: i64,
+    pub server_time: i64,
     pub final_time: i64,
+    pub rtt: i64,
 }
 
 impl LatencyResponse {
+    /// Half of RTT (approximation of one-way latency)
     pub fn up(&self) -> i64 {
-        self.intermediate - self.initial
+        self.rtt / 2
     }
 
+    /// Half of RTT (approximation of one-way latency)
     pub fn down(&self) -> i64 {
-        self.final_time - self.intermediate
+        self.rtt / 2
     }
 
+    /// Total round-trip time in milliseconds
     pub fn total(&self) -> i64 {
-        self.final_time - self.initial
+        self.rtt
     }
 }
 

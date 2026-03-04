@@ -503,11 +503,11 @@ async fn create_bot(
             if tick_count.is_multiple_of(tps * 5) {
                 if let Some(ping) = relay.get_last_ping().await {
                     debug!(
-                        "[Bot {}] Latency: up={}ms, down={}ms, total={}ms",
+                        "[Bot {}] Latency: rtt={}ms (up≈{}ms, down≈{}ms)",
                         index,
+                        ping.total(),
                         ping.up(),
-                        ping.down(),
-                        ping.total()
+                        ping.down()
                     );
                 }
             }

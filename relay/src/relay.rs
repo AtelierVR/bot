@@ -325,20 +325,26 @@ impl NoxRelay {
 
         let mut buffer = Buffer::new();
         buffer.write_u64(initial as u64);
+        buffer.write_u64(0); // client_long (unused)
 
         let response = self
             .request_with_response(RequestType::Latency, buffer.as_slice(), 5000)
             .await?;
         let mut buf = Buffer::from_vec(response);
 
-        let initial_resp = buf.read_i64()?;
-        let intermediate = buf.read_i64()?;
+        let _initial_resp = buf.read_i64()?; // Echo of client timestamp (validation)
+        let server_time = buf.read_i64()?; // Server timestamp (for reference only)
+        let _client_long = buf.read_i64()?; // Echo of client_long
         let final_time = chrono::Utc::now().timestamp_millis();
 
+        // Calculate RTT (Round Trip Time) using only client timestamps
+        let rtt = final_time - initial;
+
         Ok(LatencyResponse {
-            initial: initial_resp,
-            intermediate,
+            initial,
+            server_time,
             final_time,
+            rtt,
         })
     }
 
