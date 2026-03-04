@@ -1,0 +1,28 @@
+[workspace]
+members = ["api", "relay", "test"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Hactazia"]
+license = "AGPL-3.0"
+
+[workspace.dependencies]
+tokio = { version = "1.35", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.21"
+url = "2.5"
+async-trait = "0.1"
+bytes = "1.5"
+quinn = "0.11"
+rustls = { version = "0.23", features = ["ring"] }
+rcgen = "0.13"
+rustls-native-certs = "0.8"
+bitflags = "2.4"

@@ -1,0 +1,21 @@
+{
+  "name": "@nox/bot",
+  "version": "1.0.0",
+  "description": "Nox load testing bot (Rust)",
+  "scripts": {
+    "build": "cargo build --release",
+    "build:dev": "cargo build",
+    "test": "cargo test",
+    "clean": "cargo clean",
+    "clippy": "cargo clippy -- -D warnings",
+    "fmt": "cargo fmt --all -- --check"
+  },
+  "keywords": [
+    "nox",
+    "bot",
+    "load-testing",
+    "rust"
+  ],
+  "author": "Hactazia",
+  "license": "AGPL-3.0"
+}
