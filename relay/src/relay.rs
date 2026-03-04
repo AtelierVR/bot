@@ -311,23 +311,10 @@ impl NoxRelay {
     }
 
     pub async fn handshake(&self, request: HandshakeRequest) -> Result<HandshakeResponse> {
-        info!("Starting handshake with protocol {}", request.protocol);
         let mut buffer = Buffer::new();
         buffer.write_u16(request.protocol);
         buffer.write_string(&request.engine);
         buffer.write_string(&request.platform);
-
-        info!(
-            "📤 Handshake Buffer: hex={}, bytes={:?}, length={}",
-            buffer
-                .as_slice()
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join(" "),
-            buffer.as_slice(),
-            buffer.as_slice().len()
-        );
 
         let response = self
             .request_with_response(RequestType::Handshake, buffer.as_slice(), 10000)
@@ -384,11 +371,6 @@ impl NoxRelay {
 
     /// Effectue l'authentification complète avec challenge/response
     pub async fn authenticate(&self, credentials: &Credentials) -> Result<AuthResponse> {
-        info!(
-            "Starting authentication for user {}@{}",
-            credentials.user_id, credentials.server
-        );
-
         // Étape 1: Demander un challenge
         let challenge_req = create_challenge_request();
         let challenge_resp_data = self
@@ -399,8 +381,6 @@ impl NoxRelay {
 
         let challenge = match challenge_resp {
             AuthResponse::Challenge { challenge } => {
-                debug!("[Auth] Received challenge: {} bytes", challenge.len());
-                debug!("[Auth] Challenge (hex): {}", hex::encode(&challenge));
                 challenge
             }
             AuthResponse::Error { result, reason, .. } => {
@@ -417,14 +397,6 @@ impl NoxRelay {
 
         // Étape 2: Signer le challenge
         let signature = credentials.sign(&challenge).map_err(|e| anyhow!(e))?;
-        debug!(
-            "[Auth] Signed challenge: {} bytes signature",
-            signature.len()
-        );
-        debug!(
-            "[Auth] Signature (first 64 bytes, hex): {}",
-            hex::encode(&signature[..signature.len().min(64)])
-        );
 
         // Étape 3: Envoyer la résolution du challenge
         let resolve_req =
@@ -442,7 +414,7 @@ impl NoxRelay {
                 display_name,
             } => {
                 info!(
-                    "✓ Authentication successful: user={}@{} display=\"{}\"",
+                    "Authentication successful: user={}@{} display=\"{}\"",
                     user_id, address, display_name
                 );
             }
@@ -486,7 +458,6 @@ impl NoxRelay {
     }
 
     pub async fn sessions(&self, request: SessionRequest) -> Result<SessionResponse> {
-        info!("Requesting sessions page {}", request.page);
         let mut buffer = Buffer::new();
         buffer.write_u8(request.page as u8); // page is u8
 
@@ -517,18 +488,11 @@ impl NoxRelay {
         let current_page = buf.read_u8()?; // current page: 1 byte
         let total_pages = buf.read_u8()?; // total pages: 1 byte
 
-        debug!(
-            "Sessions: {} instances, page {}/{}",
-            count, current_page, total_pages
-        );
-
-        Ok(SessionResponse { instances })
+        Ok(SessionResponse { instances, current_page, total_pages })
     }
 
     /// Envoie une requête de déconnexion propre au serveur relay
     pub async fn disconnect(&self, reason: Option<String>) -> Result<DisconnectResponse> {
-        info!("Disconnecting from relay (reason: {:?})", reason);
-
         let mut buffer = Buffer::new();
         if let Some(ref r) = reason {
             if !r.is_empty() {

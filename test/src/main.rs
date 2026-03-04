@@ -352,15 +352,10 @@ async fn create_bot(
 
     // Démarrer le keep-alive automatique
     relay.start_keep_alive();
-    info!("[Bot {}] Keep-alive started", index);
 
     // Authentification
     match noxrelay::NoxCredentials::load(config_dir) {
         Ok(credentials) => {
-            info!(
-                "[Bot {}] Credentials loaded: user_id={} server={}",
-                index, credentials.user_id, credentials.server
-            );
             match relay.authenticate(&credentials).await {
                 Ok(auth_result) => {
                     info!(
@@ -388,12 +383,6 @@ async fn create_bot(
         .await
         .context("Failed to get sessions")?;
 
-    info!(
-        "[Bot {}] Found {} instances",
-        index,
-        sessions.instances.len()
-    );
-
     // Find the target instance
     let relay_instance_info = sessions
         .instances
@@ -414,8 +403,6 @@ async fn create_bot(
         .await
         .context("Failed to enter instance")?;
 
-    info!("[Bot {}] Entered instance: {:?}", index, enter_response);
-
     // Traveling
     instance
         .traveling(TravelingRequest {
@@ -432,8 +419,6 @@ async fn create_bot(
         })
         .await
         .context("Failed to ready")?;
-
-    info!("[Bot {}] Traveling complete", index);
 
     // Change avatar and extract player_id
     let bot_player_id = if let noxrelay::EnterResponse::Success { player_id, .. } = enter_response {
@@ -454,12 +439,6 @@ async fn create_bot(
     let movement = movements::get_random_movement();
     let mut movement_state = movement.initialize(index);
     movement_state.player_id = bot_player_id;
-    info!(
-        "[Bot {}] Using movement: {} (player_id={})",
-        index,
-        movement.name(),
-        bot_player_id
-    );
 
     // Get initial tps for movement
     let initial_tps = if let noxrelay::EnterResponse::Success { tps, .. } = enter_response {
@@ -506,11 +485,6 @@ async fn create_bot(
     // Start listening for server broadcasts
     relay.start_datagram_listener();
 
-    // Spawn movement loop as independent task so worker can handle next bot
-    info!(
-        "[Bot {}] Spawning movement loop task with initial TPS={}",
-        index, initial_tps
-    );
     let bot_task = tokio::spawn(async move {
         let mut tps = initial_tps;
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1000 / tps));
@@ -520,7 +494,6 @@ async fn create_bot(
                 // Check for TPS updates from broadcasts
                 Some(new_tps) = tps_rx.recv() => {
                     if new_tps as u64 != tps {
-                        info!("[Bot {}] TPS changed: {} -> {} (via broadcast)", index, tps, new_tps);
                         tps = new_tps as u64;
                         // Recreate interval with new TPS
                         interval = tokio::time::interval(tokio::time::Duration::from_millis(1000 / tps));

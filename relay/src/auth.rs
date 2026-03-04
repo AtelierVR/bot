@@ -132,12 +132,6 @@ impl Credentials {
             .map(|doc| doc.as_bytes().to_vec())
             .map_err(|e| format!("Failed to export public key: {}", e))?;
 
-        tracing::debug!("[Auth] Exported public key: {} bytes", der.len());
-        tracing::debug!(
-            "[Auth] Public key (first 64 bytes, hex): {}",
-            hex::encode(&der[..der.len().min(64)])
-        );
-
         Ok(der)
     }
 
@@ -147,22 +141,10 @@ impl Credentials {
         use rsa::signature::{SignatureEncoding, Signer};
         use sha2::Sha256;
 
-        tracing::debug!("[Auth] Signing data: {} bytes", data.len());
-        tracing::debug!("[Auth] Data to sign (hex): {}", hex::encode(data));
-
         // Créer un signing key avec SHA-256 (le hash sera fait automatiquement)
         let signing_key = SigningKey::<Sha256>::new(self.private_key.clone());
         let signature = signing_key.sign(data);
         let signature_bytes = signature.to_vec();
-
-        tracing::debug!(
-            "[Auth] Generated signature: {} bytes",
-            signature_bytes.len()
-        );
-        tracing::debug!(
-            "[Auth] Signature (first 64 bytes, hex): {}",
-            hex::encode(&signature_bytes[..signature_bytes.len().min(64)])
-        );
 
         Ok(signature_bytes)
     }

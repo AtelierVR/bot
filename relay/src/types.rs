@@ -202,6 +202,8 @@ pub struct SessionRequest {
 #[derive(Debug, Clone)]
 pub struct SessionResponse {
     pub instances: Vec<RelayInstanceInfo>,
+    pub current_page: u8,
+    pub total_pages: u8,
 }
 
 #[derive(Debug, Clone)]

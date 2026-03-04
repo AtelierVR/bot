@@ -9,7 +9,7 @@ pub mod types;
 
 pub use auth::*;
 pub use buffer::Buffer;
-pub use connector::{Connector, QuicConnector, SkipServerVerification, TcpConnector, UdpConnector};
+pub use connector::{Connector, QuicConnector, SkipServerVerification};
 pub use credentials::NoxCredentials;
 pub use instance::RelayInstance;
 pub use protocol::{RequestType, ResponseType};
