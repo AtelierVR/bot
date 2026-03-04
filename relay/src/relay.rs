@@ -73,18 +73,28 @@ impl NoxRelay {
 
     /// Démarre l'écoute des broadcasts (datagrams) du serveur
     pub fn start_datagram_listener(self: &Arc<Self>) {
+        info!("Starting datagram listener task...");
         let relay = Arc::clone(self);
         tokio::spawn(async move {
+            info!("Datagram listener task spawned, entering loop...");
             relay.datagram_listener_loop().await;
         });
     }
 
     async fn datagram_listener_loop(&self) {
-        debug!("Datagram listener started");
+        let running = self.running.load(Ordering::SeqCst);
+        info!("Datagram listener loop starting (running={})", running);
+        
+        if !running {
+            warn!("Datagram listener stopped immediately: relay not running");
+            return;
+        }
+        
+        let mut received_count = 0u64;
         
         loop {
             if !self.running.load(Ordering::SeqCst) {
-                debug!("Datagram listener stopping: relay not running");
+                info!("Datagram listener stopping: relay not running (received {} total)", received_count);
                 break;
             }
 
@@ -104,9 +114,11 @@ impl NoxRelay {
             // Try to receive a datagram
             match quic.recv_datagram().await {
                 Ok(Some(data)) => {
+                    received_count += 1;
+                    debug!("Datagram received: {} bytes (total: {})", data.len(), received_count);
                     drop(connector); // Release lock before processing
                     if let Err(e) = self.process_datagram(&data).await {
-                        debug!("Failed to process datagram: {}", e);
+                        warn!("Failed to process datagram: {}", e);
                     }
                 }
                 Ok(None) => {
@@ -116,13 +128,13 @@ impl NoxRelay {
                 }
                 Err(e) => {
                     drop(connector);
-                    warn!("Datagram receive error: {}", e);
+                    warn!("Datagram receive error: {} (received {} total)", e, received_count);
                     break;
                 }
             }
         }
         
-        debug!("Datagram listener ended");
+        info!("Datagram listener ended (received {} total)", received_count);
     }
 
     async fn process_datagram(&self, data: &[u8]) -> Result<()> {
@@ -136,7 +148,7 @@ impl NoxRelay {
 
         // Check if it's a ServerConfig packet
         if type_byte == ResponseType::ServerConfig as u8 {
-            debug!("Received ServerConfig broadcast, parsing...");
+            info!("Received ServerConfig broadcast ({} bytes), parsing...", data.len());
             
             // Parse ServerConfig response
             let iid = buf.read_u8()?;
