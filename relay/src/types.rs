@@ -259,8 +259,20 @@ pub struct TransformRequest {
 #[derive(Debug, Clone)]
 pub struct AvatarChangeRequest {
     pub player_id: u16,
-    pub avatar_id: u64,
+    pub avatar_id: u32,
     pub avatar_server: String,
+    pub version: u16,
+}
+
+impl AvatarChangeRequest {
+    pub fn new(player_id: u16, avatar_id: u32, avatar_server: String) -> Self {
+        Self {
+            player_id,
+            avatar_id,
+            avatar_server,
+            version: u16::MAX,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

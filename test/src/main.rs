@@ -162,12 +162,22 @@ async fn main() -> Result<()> {
     // Track active bot tasks for graceful shutdown
     let active_bots = Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
+    // Load the API token for the current server (best-effort)
+    let api_token: Option<String> = noxrelay::NoxCredentials::load_config(args.config_dir.clone())
+        .ok()
+        .and_then(|cfg| {
+            let token = cfg.servers.get(&cfg.server)?.token.clone();
+            token
+        });
+
     // Create a queue for bot creation commands
     struct BotCommand {
         index: usize,
         relay_addr: String,
         instance_id: u64,
         config_dir: Option<PathBuf>,
+        nox: Nox,
+        token: Option<String>,
     }
 
     let (tx, rx) = mpsc::channel::<BotCommand>(args.count);
@@ -200,6 +210,8 @@ async fn main() -> Result<()> {
                             &cmd.relay_addr,
                             cmd.instance_id,
                             cmd.config_dir,
+                            cmd.nox,
+                            cmd.token,
                             shutdown_flag.clone(),
                             active_bots_ref.clone(),
                         )
@@ -231,6 +243,8 @@ async fn main() -> Result<()> {
                 relay_addr,
                 instance_id: instance.id as u64,
                 config_dir: config_dir_clone.clone(),
+                nox: nox.clone(),
+                token: api_token.clone(),
             };
 
             if tx_clone.send(cmd).await.is_err() {
@@ -297,6 +311,8 @@ async fn create_bot(
     relay_addr: &str,
     instance_id: u64,
     config_dir: Option<PathBuf>,
+    nox: Nox,
+    token: Option<String>,
     shutdown: Arc<AtomicBool>,
     active_bots: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 ) -> Result<()> {
@@ -353,7 +369,7 @@ async fn create_bot(
     relay.start_keep_alive();
 
     // Authentification
-    match noxrelay::NoxCredentials::load(config_dir) {
+    match noxrelay::NoxCredentials::load(config_dir.clone()) {
         Ok(credentials) => {
             match relay.authenticate(&credentials).await {
                 Ok(auth_result) => {
@@ -402,6 +418,44 @@ async fn create_bot(
         .await
         .context("Failed to enter instance")?;
 
+    // Extract enter response fields
+    let (bot_player_id, initial_tps) = match enter_response {
+        noxrelay::EnterResponse::Success { player_id, entity_id, tps } => {
+            info!(
+                "[Bot {}] Entered instance: player_id={}, entity_id={}, tps={}",
+                index, player_id, entity_id, tps
+            );
+            (player_id, tps as u64)
+        }
+        noxrelay::EnterResponse::Error { code, reason } => {
+            warn!("[Bot {}] Enter failed: code={}, reason={}", index, code, reason);
+            return Err(anyhow::anyhow!("Enter failed: {}", reason));
+        }
+    };
+
+    // Fetch user avatar from API in parallel while we do traveling
+    let avatar_future = {
+        let nox = nox.clone();
+        let token = token.clone();
+        let index = index;
+        async move {
+            if let Some(tok) = token {
+                match nox.get_me(&tok).await.data {
+                    Some(user) => {
+                        info!("[Bot {}] User profile: {} ({})", index, user.display_name, user.username);
+                        user.avatar
+                    }
+                    None => {
+                        warn!("[Bot {}] Failed to fetch user profile via @me", index);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        }
+    };
+
     // Traveling
     instance
         .traveling(TravelingRequest {
@@ -419,32 +473,36 @@ async fn create_bot(
         .await
         .context("Failed to ready")?;
 
-    // Change avatar and extract player_id
-    let bot_player_id = if let noxrelay::EnterResponse::Success { player_id, .. } = enter_response {
-        instance
-            .change_avatar(AvatarChangeRequest {
-                player_id,
-                avatar_id: 1,
-                avatar_server: "hactazia.fr".to_string(),
-            })
-            .await
-            .context("Failed to change avatar")?;
-        player_id
+    // Now send avatar change (player is valid after Ready)
+    let user_avatar = avatar_future.await;
+    if let Some(ref avatar_str) = user_avatar {
+        let (avatar_id_str, avatar_srv) = match avatar_str.split_once('@') {
+            Some((id, srv)) => (id, srv.to_string()),
+            None => (avatar_str.as_str(), "hactazia.fr".to_string()),
+        };
+        if let Ok(avatar_id) = avatar_id_str.parse::<u32>() {
+            match instance
+                .change_avatar(AvatarChangeRequest::new(
+                    bot_player_id,
+                    avatar_id,
+                    avatar_srv.clone(),
+                ))
+                .await
+            {
+                Ok(_) => info!("[Bot {}] Avatar set to {}@{}", index, avatar_id, avatar_srv),
+                Err(e) => warn!("[Bot {}] Failed to set avatar: {}", index, e),
+            }
+        } else {
+            warn!("[Bot {}] Could not parse avatar id from '{}'", index, avatar_str);
+        }
     } else {
-        0
-    };
+        info!("[Bot {}] User has no default avatar set", index);
+    }
 
     // Select random movement
     let movement = movements::get_random_movement();
     let mut movement_state = movement.initialize(index);
     movement_state.player_id = bot_player_id;
-
-    // Get initial tps for movement
-    let initial_tps = if let noxrelay::EnterResponse::Success { tps, .. } = enter_response {
-        tps as u64
-    } else {
-        20
-    };
 
     // Create channel for TPS updates
     let (tps_tx, mut tps_rx) = tokio::sync::mpsc::unbounded_channel();

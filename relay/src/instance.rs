@@ -267,10 +267,11 @@ impl RelayInstance {
         request: AvatarChangeRequest,
     ) -> Result<AvatarChangeResponse> {
         let mut buffer = Buffer::new();
-        buffer.write_u8(self.id as u8); // Instance internal ID
-        buffer.write_u16(request.player_id);
-        buffer.write_u64(request.avatar_id);
-        buffer.write_string(&request.avatar_server);
+        buffer.write_u8(self.id as u8);         // iid: u8
+        buffer.write_u16(request.player_id);    // pid: u16
+        buffer.write_u32(request.avatar_id as u32); // avatar_id: u32
+        buffer.write_string(&request.avatar_server); // server: string
+        buffer.write_u16(request.version);          // version: u16
 
         let response = self
             .relay
@@ -286,20 +287,19 @@ impl RelayInstance {
         let _iid = buf.read_u8()?;
         let result = buf.read_u8()?;
 
-        if result == 0x01 {
-            // Success
-            Ok(AvatarChangeResponse::Success)
-        } else if result == 0x02 {
-            // Failed
-            let message = buf
-                .read_string()
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            Ok(AvatarChangeResponse::Error {
-                code: result,
-                message,
-            })
-        } else {
-            Ok(AvatarChangeResponse::Failed)
+        match result {
+            3 => Ok(AvatarChangeResponse::Success), // AvatarChangedResult::Success = 3
+            2 => {
+                // AvatarChangedResult::Failed = 2
+                let message = buf
+                    .read_string()
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                Ok(AvatarChangeResponse::Error {
+                    code: result,
+                    message,
+                })
+            }
+            _ => Ok(AvatarChangeResponse::Failed),
         }
     }
 

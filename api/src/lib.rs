@@ -28,7 +28,9 @@ pub struct NoxError {
 pub struct User {
     pub id: u32,
     pub username: String,
+    #[serde(rename = "display")]
     pub display_name: String,
+    pub avatar: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +91,86 @@ impl Nox {
         debug!("Fetching user from: {}", url);
 
         match self.client.get(&url).send().await {
+            Ok(response) => response.json().await.unwrap_or_else(|e| {
+                debug!("Failed to parse response: {}", e);
+                NoxResponse {
+                    data: None,
+                    error: Some(NoxError {
+                        code: -1,
+                        message: format!("Parse error: {}", e),
+                        status: 500,
+                    }),
+                    time: Self::now(),
+                    request: url.clone(),
+                }
+            }),
+            Err(e) => {
+                debug!("Request failed: {}", e);
+                NoxResponse {
+                    data: None,
+                    error: Some(NoxError {
+                        code: -1,
+                        message: format!("Network error: {}", e),
+                        status: 500,
+                    }),
+                    time: Self::now(),
+                    request: url,
+                }
+            }
+        }
+    }
+
+    pub async fn get_me(&self, token: &str) -> NoxResponse<User> {
+        let url = format!(
+            "{}/api/users/@me",
+            self.base_url.trim_end_matches('/')
+        );
+        debug!("Fetching current user from: {}", url);
+
+        match self.client.get(&url).bearer_auth(token).send().await {
+            Ok(response) => response.json().await.unwrap_or_else(|e| {
+                debug!("Failed to parse response: {}", e);
+                NoxResponse {
+                    data: None,
+                    error: Some(NoxError {
+                        code: -1,
+                        message: format!("Parse error: {}", e),
+                        status: 500,
+                    }),
+                    time: Self::now(),
+                    request: url.clone(),
+                }
+            }),
+            Err(e) => {
+                debug!("Request failed: {}", e);
+                NoxResponse {
+                    data: None,
+                    error: Some(NoxError {
+                        code: -1,
+                        message: format!("Network error: {}", e),
+                        status: 500,
+                    }),
+                    time: Self::now(),
+                    request: url,
+                }
+            }
+        }
+    }
+
+    pub async fn get_user_by_id(&self, id: u32, token: Option<&str>) -> NoxResponse<User> {
+        let url = format!(
+            "{}/api/users/{}",
+            self.base_url.trim_end_matches('/'),
+            id
+        );
+        debug!("Fetching user by id from: {}", url);
+
+        let mut req = self.client.get(&url);
+        if let Some(token) = token {
+            req = req.bearer_auth(token);
+        }
+
+        match req.send().await {
             Ok(response) => response.json().await.unwrap_or_else(|e| {
                 debug!("Failed to parse response: {}", e);
                 NoxResponse {

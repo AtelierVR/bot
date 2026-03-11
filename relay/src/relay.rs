@@ -117,11 +117,12 @@ impl NoxRelay {
     }
 
     async fn process_datagram(&self, data: &[u8]) -> Result<()> {
-        if data.len() < 3 {
+        if data.len() < 5 {
             return Err(anyhow!("Datagram too short"));
         }
 
         let mut buf = Buffer::from_vec(data.to_vec());
+        let _length = buf.read_u16()?; // inclusive total length (same as stream)
         let _uid = buf.read_u16()?;
         let type_byte = buf.read_u8()?;
 
@@ -539,19 +540,19 @@ impl NoxRelay {
 
     /// Internal send method (no response expected) for use by RelayInstance
     pub async fn send_internal(&self, request_type: RequestType, data: &[u8]) -> Result<()> {
-        // For datagrams, format is: [UID: u16][Type: u8][data...]
-        // (no length or state fields)
+        // Datagram wire format is identical to stream format:
+        // [Length: u16][UID: u16][Type: u8][payload...]
+        // where Length = total inclusive byte count (5 + data.len())
         let uid = self.next_state().await;
 
-        let length = 3 + data.len();
+        let length = 5 + data.len();
         let mut buffer = Buffer::with_capacity(length);
-        buffer.write_u16(uid); // UID instead of length
+        buffer.write_u16(length as u16); // total inclusive length
+        buffer.write_u16(uid);
         buffer.write_u8(request_type as u8);
         buffer.write_bytes(data);
 
         let packet = buffer.as_slice();
-        // debug!("Sending one-way request: {:?}, uid: {}, packet_len: {}",
-        //        request_type, uid, packet.len());
 
         let connector = self.connector.read().await;
 
