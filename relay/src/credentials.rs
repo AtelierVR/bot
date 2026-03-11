@@ -13,7 +13,10 @@ pub struct NoxConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
-    pub user_id: u32,
+    pub user_id: Option<u32>,
+    pub gateway: Option<String>,
+    #[serde(rename = "_token")]
+    pub token: Option<String>,
 }
 
 /// Gestionnaire des credentials Nox
@@ -76,7 +79,9 @@ impl NoxCredentials {
             .get(&server)
             .with_context(|| format!("Server '{}' not found in config", server))?;
 
-        let user_id = server_config.user_id;
+        let user_id = server_config
+            .user_id
+            .with_context(|| format!("Server '{}' has no user_id in config", server))?;
 
         let public_pem = std::fs::read_to_string(Self::public_key_path(custom_path.clone()))
             .context("Failed to read public key")?;

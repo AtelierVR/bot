@@ -113,7 +113,7 @@ impl QuicConnector {
         // ring and aws-lc-rs are compiled in).
         let provider = Arc::new(rustls::crypto::ring::default_provider());
 
-        let crypto = if self.skip_cert_verification {
+        let mut crypto = if self.skip_cert_verification {
             rustls::ClientConfig::builder_with_provider(provider)
                 .with_safe_default_protocol_versions()?
                 .dangerous()
@@ -131,6 +131,9 @@ impl QuicConnector {
                 .with_root_certificates(roots)
                 .with_no_client_auth()
         };
+
+        // Must match the server's ALPN token (tls_config.alpn_protocols = vec![b"relay".to_vec()])
+        crypto.alpn_protocols = vec![b"relay".to_vec()];
         
         // Enable QUIC datagrams for server broadcasts
         let mut transport = quinn::TransportConfig::default();
