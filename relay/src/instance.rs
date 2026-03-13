@@ -15,6 +15,8 @@ pub struct RelayInstance {
     current_tps: Arc<RwLock<u8>>,
     /// Current threshold (updated from ServerConfig)
     current_threshold: Arc<RwLock<f32>>,
+    /// Current property resend interval (updated from Enter)
+    current_property_resend_interval: Arc<RwLock<u8>>,
     /// Channel to notify TPS changes
     tps_change_tx: Arc<RwLock<Option<mpsc::UnboundedSender<u8>>>>,
 }
@@ -28,6 +30,7 @@ impl RelayInstance {
             relay,
             current_tps: Arc::new(RwLock::new(20)),
             current_threshold: Arc::new(RwLock::new(0.01)),
+            current_property_resend_interval: Arc::new(RwLock::new(0)),
             tps_change_tx: Arc::new(RwLock::new(None)),
         }
     }
@@ -73,6 +76,11 @@ impl RelayInstance {
     /// Get the current threshold
     pub async fn get_current_threshold(&self) -> f32 {
         *self.current_threshold.read().await
+    }
+
+    /// Get the current property resend interval
+    pub async fn get_current_property_resend_interval(&self) -> u8 {
+        *self.current_property_resend_interval.read().await
     }
 
     pub async fn enter(&self, request: EnterRequest) -> Result<EnterResponse> {
@@ -128,15 +136,18 @@ impl RelayInstance {
             let tps = buf.read_u8()?;
             let threshold = buf.read_f32()?;
             let entity_id = buf.read_f32()? as u16;
+            let property_resend_interval = buf.read_u8()?;
 
-            // Update current TPS and threshold
+            // Update current TPS, threshold and property_resend_interval
             *self.current_tps.write().await = tps;
             *self.current_threshold.write().await = threshold;
+            *self.current_property_resend_interval.write().await = property_resend_interval;
 
             Ok(EnterResponse::Success {
                 player_id,
                 entity_id,
                 tps,
+                property_resend_interval,
             })
         } else {
             let reason = buf

@@ -230,6 +230,7 @@ pub enum EnterResponse {
         player_id: u16,
         entity_id: u16,
         tps: u8,
+        property_resend_interval: u8,
     },
     Error {
         code: u8,

@@ -438,10 +438,10 @@ async fn create_bot(
 
     // Extract enter response fields
     let (bot_player_id, initial_tps) = match enter_response {
-        noxrelay::EnterResponse::Success { player_id, entity_id, tps } => {
+        noxrelay::EnterResponse::Success { player_id, entity_id, tps, property_resend_interval } => {
             info!(
-                "[Bot {}] Entered instance: player_id={}, entity_id={}, tps={}",
-                index, player_id, entity_id, tps
+                "[Bot {}] Entered instance: player_id={}, entity_id={}, tps={}, property_resend_interval={}",
+                index, player_id, entity_id, tps, property_resend_interval
             );
             (player_id, tps as u64)
         }
