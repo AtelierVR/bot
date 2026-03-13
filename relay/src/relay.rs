@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::{timeout, Duration};
 use tracing::{debug, info, warn};
+use serde_json;
 
 pub struct NoxRelay {
     connector: Arc<RwLock<Box<dyn Connector>>>,
@@ -27,6 +28,8 @@ pub struct NoxRelay {
     last_ping: Arc<Mutex<Option<LatencyResponse>>>,
     /// Callback for ServerConfig broadcasts
     server_config_callback: Arc<RwLock<Option<Arc<dyn Fn(ServerConfigResponse) + Send + Sync>>>>,
+    /// Generic callback for all relay events (Join, Leave, PlayerUpdate, etc.)
+    event_callback: Arc<RwLock<Option<Arc<dyn Fn(RelayEvent) + Send + Sync>>>>,
 }
 
 impl NoxRelay {
@@ -42,6 +45,7 @@ impl NoxRelay {
             keep_alive_interval: Arc::new(Mutex::new(5000)),
             last_ping: Arc::new(Mutex::new(None)),
             server_config_callback: Arc::new(RwLock::new(None)),
+            event_callback: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -51,6 +55,23 @@ impl NoxRelay {
         F: Fn(ServerConfigResponse) + Send + Sync + 'static,
     {
         *self.server_config_callback.write().await = Some(Arc::new(callback));
+    }
+
+    /// Set a callback that will be called for every relay event received from the server
+    /// (Join, Leave, PlayerUpdate, Transform, Properties, AvatarChanged, Custom Event, etc.)
+    pub async fn set_event_callback<F>(&self, callback: F)
+    where
+        F: Fn(RelayEvent) + Send + Sync + 'static,
+    {
+        *self.event_callback.write().await = Some(Arc::new(callback));
+    }
+
+    /// Démarre l'écoute des packets push (uni-stream, fiable) envoyés par le serveur
+    pub fn start_push_listener(self: &Arc<Self>) {
+        let relay = Arc::clone(self);
+        tokio::spawn(async move {
+            relay.push_listener_loop().await;
+        });
     }
 
     pub async fn connect(&self) -> Result<()> {
@@ -192,6 +213,221 @@ impl NoxRelay {
             if let Some(callback) = self.server_config_callback.read().await.as_ref() {
                 callback(response);
             }
+        }
+
+        Ok(())
+    }
+
+    async fn push_listener_loop(&self) {
+        if !self.running.load(Ordering::SeqCst) {
+            return;
+        }
+
+        loop {
+            if !self.running.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let connector = self.connector.read().await;
+            let quic = match connector
+                .as_any()
+                .downcast_ref::<crate::connector::QuicConnector>()
+            {
+                Some(q) => q,
+                None => break,
+            };
+
+            match tokio::time::timeout(
+                Duration::from_millis(200),
+                quic.accept_uni_packet(),
+            )
+            .await
+            {
+                Ok(Ok((type_byte, payload))) => {
+                    drop(connector);
+                    if let Err(e) = self.process_push_packet(type_byte, &payload).await {
+                        warn!("Failed to process push packet (type=0x{:02X}): {}", type_byte, e);
+                    }
+                }
+                Ok(Err(_e)) => {
+                    drop(connector);
+                    // Connection closed or stream error — stop loop
+                    break;
+                }
+                Err(_timeout) => {
+                    drop(connector);
+                    // No packet within timeout window — continue
+                }
+            }
+        }
+    }
+
+    async fn process_push_packet(&self, type_byte: u8, payload: &[u8]) -> Result<()> {
+        use crate::protocol::ResponseType;
+
+        let event = match type_byte {
+            // Join (0x10): [iid:u8][player_flags:u32][player_id:u16][user_id:u32]
+            //              [user_address:string][display:string][created_at:i64]
+            //              [engine:string][platform:string]
+            t if t == ResponseType::Join as u8 => {
+                let mut buf = Buffer::from_vec(payload.to_vec());
+                let _iid = buf.read_u8()?;
+                let _player_flags = buf.read_u32()?;
+                let player_id = buf.read_u16()?;
+                let _user_id = buf.read_u32()?;
+                let _user_address = buf.read_string().unwrap_or_default();
+                let display = buf.read_string().unwrap_or_default();
+                RelayEvent::Join(JoinEvent { player_id, display })
+            }
+
+            // Leave (0x11): [iid:u8][quit_type:u8][player_id:u16]
+            t if t == ResponseType::Leave as u8 => {
+                let mut buf = Buffer::from_vec(payload.to_vec());
+                let _iid = buf.read_u8()?;
+                let _quit_type = buf.read_u8()?;
+                let player_id = buf.read_u16()?;
+                RelayEvent::Leave(LeaveEvent { player_id })
+            }
+
+            // PlayerUpdate (0x12): [iid:u8][result:u8][player_id:u16][flags:u8]
+            //                       [?display:string][?player_flags:u32]
+            t if t == ResponseType::PlayerUpdate as u8 => {
+                let mut buf = Buffer::from_vec(payload.to_vec());
+                let _iid = buf.read_u8()?;
+                let _result = buf.read_u8()?;
+                let player_id = buf.read_u16()?;
+                let remaining = buf.remaining();
+                let data = buf.read_bytes(remaining)?;
+                RelayEvent::PlayerUpdate(PlayerUpdateEvent { player_id, data })
+            }
+
+            // ServerConfig (0x0E): already handled via callback, but also emit event
+            t if t == ResponseType::ServerConfig as u8 => {
+                let mut buf = Buffer::from_vec(payload.to_vec());
+                let iid = buf.read_u8()?;
+                let result = buf.read_u8()?;
+                let flags_byte = buf.read_u8()?;
+                let flags = ServerConfigFlags::from_bits_truncate(flags_byte);
+                let result_enum = match result {
+                    0 => ServerConfigResult::Success,
+                    1 => ServerConfigResult::Failure,
+                    _ => ServerConfigResult::Change,
+                };
+                let mut tps = None;
+                let mut threshold = None;
+                let mut capacity = None;
+                let mut has_password = None;
+                let mut instance_flags = None;
+                let mut min_tps = None;
+                let mut max_tps = None;
+                let mut load_balancing_enabled = None;
+                if flags.contains(ServerConfigFlags::TPS) { tps = Some(buf.read_u8()?); }
+                if flags.contains(ServerConfigFlags::THRESHOLD) { threshold = Some(buf.read_f32()?); }
+                if flags.contains(ServerConfigFlags::CAPACITY) { capacity = Some(buf.read_u16()?); }
+                if flags.contains(ServerConfigFlags::FLAGS) { instance_flags = Some(buf.read_u32()?); }
+                if flags.contains(ServerConfigFlags::PASSWORD) { has_password = Some(buf.read_u8()? != 0); }
+                if flags.contains(ServerConfigFlags::MIN_TPS) { min_tps = Some(buf.read_u8()?); }
+                if flags.contains(ServerConfigFlags::MAX_TPS) { max_tps = Some(buf.read_u8()?); }
+                if flags.contains(ServerConfigFlags::LOAD_BALANCING) { load_balancing_enabled = Some(buf.read_u8()? != 0); }
+                let response = ServerConfigResponse {
+                    instance_id: iid,
+                    result: result_enum,
+                    tps, threshold, capacity, has_password, instance_flags,
+                    min_tps, max_tps, load_balancing_enabled,
+                };
+                // Also trigger the existing server_config_callback
+                if let Some(cb) = self.server_config_callback.read().await.as_ref() {
+                    cb(response.clone());
+                }
+                // Emit as generic event so the --listen listener can see it
+                if let Some(cb) = self.event_callback.read().await.as_ref() {
+                    // Wrap in a custom event string for display
+                    let json = serde_json::to_string(&response).unwrap_or_default();
+                    cb(RelayEvent::Event(CustomEvent {
+                        name: crc64("ServerConfig"),
+                        player_id: 0,
+                        data: json.into_bytes(),
+                    }));
+                }
+                return Ok(());
+            }
+
+            // Transform (0x0B): handled separately — emit a simplified event
+            t if t == ResponseType::Transform as u8 => {
+                let mut buf = Buffer::from_vec(payload.to_vec());
+                let _iid = buf.read_u8()?;
+                let sub_type = buf.read_u8()?;
+                if sub_type == 1 {
+                    // EntityPart: [pid:u16][rig:u16][flags:u8][...data...][broadcaster_pid:u16]
+                    let entity_id = buf.read_u16()?;
+                    let _rig_id = buf.read_u16()?;
+                    let flags_byte = buf.read_u8()?;
+                    let flags = TransformFlags::from_bits_truncate(flags_byte);
+                    let position = if flags.contains(TransformFlags::POSITION) {
+                        Some(Vector3 {
+                            x: buf.read_f32()?,
+                            y: buf.read_f32()?,
+                            z: buf.read_f32()?,
+                        })
+                    } else {
+                        None
+                    };
+                    let rotation = if flags.contains(TransformFlags::ROTATION) {
+                        Some(Quaternion {
+                            x: buf.read_f32()?,
+                            y: buf.read_f32()?,
+                            z: buf.read_f32()?,
+                            w: buf.read_f32()?,
+                        })
+                    } else {
+                        None
+                    };
+                    let scale = if flags.contains(TransformFlags::SCALE) {
+                        Some(Vector3 {
+                            x: buf.read_f32()?,
+                            y: buf.read_f32()?,
+                            z: buf.read_f32()?,
+                        })
+                    } else {
+                        None
+                    };
+                    RelayEvent::Transform(TransformEvent {
+                        entity_id,
+                        transform: Transform { position, rotation, scale },
+                    })
+                } else {
+                    // ByPath or unknown sub-type — skip
+                    return Ok(());
+                }
+            }
+
+            // AvatarChanged broadcast (0x0D)
+            t if t == ResponseType::AvatarChanged as u8 => {
+                let mut buf = Buffer::from_vec(payload.to_vec());
+                let _iid = buf.read_u8()?;
+                let player_id = buf.read_u16()?;
+                let avatar_id = buf.read_u32()? as u64;
+                let avatar_server = buf.read_string().unwrap_or_default();
+                RelayEvent::AvatarChanged(AvatarChangedEvent { player_id, avatar_id, avatar_server })
+            }
+
+            // Custom Event (0x15): [iid:u8][name_hash:u64][data_len:u16][data][targets...]
+            t if t == ResponseType::Event as u8 => {
+                let mut buf = Buffer::from_vec(payload.to_vec());
+                let _iid = buf.read_u8()?;
+                let name = buf.read_u64()?;
+                let data_len = buf.read_u16()? as usize;
+                let data = buf.read_bytes(data_len)?;
+                RelayEvent::Event(CustomEvent { name, player_id: 0, data })
+            }
+
+            // Unknown or unhandled packet type — ignore
+            _ => return Ok(()),
+        };
+
+        // Dispatch to the event callback if registered
+        if let Some(cb) = self.event_callback.read().await.as_ref() {
+            cb(event);
         }
 
         Ok(())

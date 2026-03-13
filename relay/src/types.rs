@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use serde::Serialize;
 use std::collections::HashMap;
 
 bitflags! {
@@ -67,14 +68,14 @@ impl TransformType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Vector3 {
     pub x: f32,
     pub y: f32,
     pub z: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Quaternion {
     pub x: f32,
     pub y: f32,
@@ -82,7 +83,7 @@ pub struct Quaternion {
     pub w: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Transform {
     pub position: Option<Vector3>,
     pub rotation: Option<Quaternion>,
@@ -125,7 +126,7 @@ pub struct ServerConfigRequest {
     pub instance_flags: Option<u32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ServerConfigResponse {
     pub instance_id: u8,
     pub result: ServerConfigResult,
@@ -140,7 +141,7 @@ pub struct ServerConfigResponse {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ServerConfigResult {
     Success = 0,
     Failure = 1,
@@ -285,7 +286,7 @@ pub enum AvatarChangeResponse {
 #[derive(Debug, Clone)]
 pub struct PropertiesRequest {
     pub entity_id: u16,
-    pub parameters: HashMap<String, Vec<u8>>,
+    pub parameters: HashMap<i32, Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -295,7 +296,8 @@ pub struct EventRequest {
     pub targets: Vec<u16>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", content = "data")]
 pub enum RelayEvent {
     Traveling(TravelingEvent),
     PlayerUpdate(PlayerUpdateEvent),
@@ -309,61 +311,61 @@ pub enum RelayEvent {
     Transform(TransformEvent),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TravelingEvent {
     pub status: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PlayerUpdateEvent {
     pub player_id: u16,
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PropertiesEvent {
     pub entity_id: u16,
     pub parameters: HashMap<String, Vec<u8>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AvatarChangedEvent {
     pub player_id: u16,
     pub avatar_id: u64,
     pub avatar_server: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EnterEvent {
     pub player_id: u16,
     pub entity_id: u16,
     pub display: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LeaveEvent {
     pub player_id: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct JoinEvent {
     pub player_id: u16,
     pub display: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct QuitEvent {
     pub player_id: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CustomEvent {
     pub name: u64,
     pub player_id: u16,
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TransformEvent {
     pub entity_id: u16,
     pub transform: Transform,

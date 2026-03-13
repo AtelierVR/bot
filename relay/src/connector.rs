@@ -267,4 +267,41 @@ impl QuicConnector {
     pub fn connection(&self) -> Option<&Connection> {
         self.connection.as_ref()
     }
+
+    /// Accept an incoming unidirectional stream from the server and read one framed packet.
+    /// Returns (type_byte, payload) where type_byte is the packet type and payload is the body.
+    pub async fn accept_uni_packet(&self) -> Result<(u8, Vec<u8>)> {
+        if let Some(ref conn) = self.connection {
+            let mut recv = conn.accept_uni().await
+                .map_err(|e| anyhow::anyhow!("accept_uni error: {}", e))?;
+
+            // Read the 2-byte inclusive length prefix (big-endian)
+            let mut len_buf = [0u8; 2];
+            recv.read_exact(&mut len_buf)
+                .await
+                .map_err(|e| anyhow::anyhow!("uni read length: {}", e))?;
+
+            let total = u16::from_be_bytes(len_buf) as usize;
+            if total < 5 {
+                return Err(anyhow::anyhow!("uni packet too short: {}", total));
+            }
+
+            // Read the rest: [uid: u16][type: u8][payload...]
+            let rest_len = total - 2;
+            let mut rest = vec![0u8; rest_len];
+            recv.read_exact(&mut rest)
+                .await
+                .map_err(|e| anyhow::anyhow!("uni read body: {}", e))?;
+
+            // rest[0..1] = uid (ignored), rest[2] = type byte, rest[3..] = payload
+            if rest.len() < 3 {
+                return Err(anyhow::anyhow!("uni packet header incomplete"));
+            }
+            let type_byte = rest[2];
+            let payload = rest[3..].to_vec();
+            Ok((type_byte, payload))
+        } else {
+            Err(anyhow::anyhow!("QUIC: not connected"))
+        }
+    }
 }

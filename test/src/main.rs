@@ -53,6 +53,14 @@ struct Args {
     /// Delay in milliseconds between bot spawns
     #[arg(long, default_value = "1000")]
     delay: u64,
+
+    /// Print all received relay packets as JSON (uses serde_json)
+    #[arg(long, default_value = "false")]
+    listen: bool,
+
+    /// Movement mode: random, circular, rtp, square, cross, target
+    #[arg(long, default_value = "random")]
+    movement: String,
 }
 
 #[tokio::main]
@@ -178,6 +186,8 @@ async fn main() -> Result<()> {
         config_dir: Option<PathBuf>,
         nox: Nox,
         token: Option<String>,
+        listen: bool,
+        movement: String,
     }
 
     let (tx, rx) = mpsc::channel::<BotCommand>(args.count);
@@ -212,6 +222,8 @@ async fn main() -> Result<()> {
                             cmd.config_dir,
                             cmd.nox,
                             cmd.token,
+                            cmd.listen,
+                            &cmd.movement,
                             shutdown_flag.clone(),
                             active_bots_ref.clone(),
                         )
@@ -235,6 +247,8 @@ async fn main() -> Result<()> {
     let config_dir_clone = args.config_dir.clone();
     let bot_count = args.count;
     let bot_delay = args.delay;
+    let bot_listen = args.listen;
+    let bot_movement = args.movement.clone();
     let producer = tokio::spawn(async move {
         for i in 0..bot_count {
             let relay_addr = relay_addresses[i % relay_addresses.len()].clone();
@@ -245,6 +259,8 @@ async fn main() -> Result<()> {
                 config_dir: config_dir_clone.clone(),
                 nox: nox.clone(),
                 token: api_token.clone(),
+                listen: bot_listen,
+                movement: bot_movement.clone(),
             };
 
             if tx_clone.send(cmd).await.is_err() {
@@ -313,6 +329,8 @@ async fn create_bot(
     config_dir: Option<PathBuf>,
     nox: Nox,
     token: Option<String>,
+    listen: bool,
+    movement_name: &str,
     shutdown: Arc<AtomicBool>,
     active_bots: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 ) -> Result<()> {
@@ -499,8 +517,9 @@ async fn create_bot(
         info!("[Bot {}] User has no default avatar set", index);
     }
 
-    // Select random movement
-    let movement = movements::get_random_movement();
+    // Select movement
+    let movement = movements::get_movement(movement_name);
+    info!("[Bot {}] Movement: {}", index, movement.name());
     let mut movement_state = movement.initialize(index);
     movement_state.player_id = bot_player_id;
 
@@ -541,6 +560,21 @@ async fn create_bot(
 
     // Start listening for server broadcasts
     relay.start_datagram_listener();
+
+    // Always start the push listener to accept incoming uni-stream packets from the server.
+    // This is required so the connection doesn't stall.
+    relay.start_push_listener();
+
+    // If --listen is active, register a callback that prints every received event as JSON
+    if listen {
+        let bot_index = index;
+        relay.set_event_callback(move |event| {
+            match serde_json::to_string(&event) {
+                Ok(json) => info!("[Bot {}] RX {}", bot_index, json),
+                Err(e) => warn!("[Bot {}] Failed to serialize event: {}", bot_index, e),
+            }
+        }).await;
+    }
 
     let bot_task = tokio::spawn(async move {
         let mut tps = initial_tps;

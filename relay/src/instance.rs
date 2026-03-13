@@ -247,11 +247,11 @@ impl RelayInstance {
         let mut buffer = Buffer::new();
         buffer.write_u8(self.id as u8); // Instance internal ID
         buffer.write_u16(request.entity_id);
-        buffer.write_u16(request.parameters.len() as u16);
+        buffer.write_u8(request.parameters.len() as u8);
 
         for (key, value) in &request.parameters {
-            buffer.write_string(key);
-            buffer.write_u16(value.len() as u16);
+            buffer.write_i32(*key);
+            buffer.write_u8(value.len() as u8);
             buffer.write_bytes(value);
         }
 
