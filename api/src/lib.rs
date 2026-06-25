@@ -19,7 +19,7 @@ pub struct NoxResponse<T> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoxError {
-    pub code: i32,
+    pub code: String,
     pub message: String,
     pub status: u16,
 }
@@ -38,6 +38,7 @@ pub struct Instance {
     pub id: u32,
     pub name: String,
     pub capacity: u16,
+    #[serde(rename = "count")]
     pub client_count: u16,
     pub connection: ConnectionInfo,
 }
@@ -96,7 +97,7 @@ impl Nox {
                 NoxResponse {
                     data: None,
                     error: Some(NoxError {
-                        code: -1,
+                        code: "INTERNAL_ERROR".to_string(),
                         message: format!("Parse error: {}", e),
                         status: 500,
                     }),
@@ -109,7 +110,7 @@ impl Nox {
                 NoxResponse {
                     data: None,
                     error: Some(NoxError {
-                        code: -1,
+                        code: "INTERNAL_ERROR".to_string(),
                         message: format!("Network error: {}", e),
                         status: 500,
                     }),
@@ -133,7 +134,7 @@ impl Nox {
                 NoxResponse {
                     data: None,
                     error: Some(NoxError {
-                        code: -1,
+                        code: "INTERNAL_ERROR".to_string(),
                         message: format!("Parse error: {}", e),
                         status: 500,
                     }),
@@ -146,7 +147,7 @@ impl Nox {
                 NoxResponse {
                     data: None,
                     error: Some(NoxError {
-                        code: -1,
+                        code: "INTERNAL_ERROR".to_string(),
                         message: format!("Network error: {}", e),
                         status: 500,
                     }),
@@ -176,7 +177,7 @@ impl Nox {
                 NoxResponse {
                     data: None,
                     error: Some(NoxError {
-                        code: -1,
+                        code: "INTERNAL_ERROR".to_string(),
                         message: format!("Parse error: {}", e),
                         status: 500,
                     }),
@@ -189,7 +190,7 @@ impl Nox {
                 NoxResponse {
                     data: None,
                     error: Some(NoxError {
-                        code: -1,
+                        code: "INTERNAL_ERROR".to_string(),
                         message: format!("Network error: {}", e),
                         status: 500,
                     }),
@@ -214,7 +215,7 @@ impl Nox {
                 NoxResponse {
                     data: None,
                     error: Some(NoxError {
-                        code: -1,
+                        code: "INTERNAL_ERROR".to_string(),
                         message: format!("Parse error: {}", e),
                         status: 500,
                     }),
@@ -227,7 +228,7 @@ impl Nox {
                 NoxResponse {
                     data: None,
                     error: Some(NoxError {
-                        code: -1,
+                        code: "INTERNAL_ERROR".to_string(),
                         message: format!("Network error: {}", e),
                         status: 500,
                     }),

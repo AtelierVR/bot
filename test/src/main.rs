@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use url::Url;
 
+mod audio;
 mod movements;
 
 /// Get the platform name based on the OS
@@ -61,6 +62,15 @@ struct Args {
     /// Movement mode: random, circular, rtp, square, cross, target
     #[arg(long, default_value = "random")]
     movement: String,
+
+    /// Connect as a regular user instead of a bot (skips the AUTHORIZE_BOT instance check)
+    #[arg(long, default_value = "false")]
+    human: bool,
+
+    /// Path to an Ogg Opus audio file to play once the bot is ready.
+    /// Prepare with: ffmpeg -i input.wav -c:a libopus -f ogg output.ogg
+    #[arg(long)]
+    play: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -188,6 +198,8 @@ async fn main() -> Result<()> {
         token: Option<String>,
         listen: bool,
         movement: String,
+        human: bool,
+        audio_file: Option<Vec<Vec<u8>>>,
     }
 
     let (tx, rx) = mpsc::channel::<BotCommand>(args.count);
@@ -224,6 +236,8 @@ async fn main() -> Result<()> {
                             cmd.token,
                             cmd.listen,
                             &cmd.movement,
+                            cmd.human,
+                            cmd.audio_file,
                             shutdown_flag.clone(),
                             active_bots_ref.clone(),
                         )
@@ -249,6 +263,33 @@ async fn main() -> Result<()> {
     let bot_delay = args.delay;
     let bot_listen = args.listen;
     let bot_movement = args.movement.clone();
+    let bot_human = args.human;
+
+    // Read and parse audio file if --play is specified
+    let audio_packets: Option<Vec<Vec<u8>>> = match &args.play {
+        Some(path) => {
+            match std::fs::read(path) {
+                Ok(data) => {
+                    match audio::parse_ogg_opus(&data) {
+                        Ok(packets) => {
+                            info!("Loaded Ogg Opus file {:?}: {} packets ({} bytes total)", path, packets.len(), data.len());
+                            Some(packets)
+                        }
+                        Err(e) => {
+                            error!("Failed to parse Ogg Opus file {:?}: {}", path, e);
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to read audio file {:?}: {}", path, e);
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     let producer = tokio::spawn(async move {
         for i in 0..bot_count {
             let relay_addr = relay_addresses[i % relay_addresses.len()].clone();
@@ -261,6 +302,8 @@ async fn main() -> Result<()> {
                 token: api_token.clone(),
                 listen: bot_listen,
                 movement: bot_movement.clone(),
+                human: bot_human,
+                audio_file: audio_packets.clone(),
             };
 
             if tx_clone.send(cmd).await.is_err() {
@@ -331,6 +374,8 @@ async fn create_bot(
     token: Option<String>,
     listen: bool,
     movement_name: &str,
+    human: bool,
+    audio_file: Option<Vec<Vec<u8>>>,
     shutdown: Arc<AtomicBool>,
     active_bots: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 ) -> Result<()> {
@@ -430,7 +475,7 @@ async fn create_bot(
         .enter(EnterRequest {
             instance_id: relay_instance_info.id,
             display: format!("RustBot-{}", index),
-            flags: EnterFlags::AS_BOT,
+            flags: if human { EnterFlags::empty() } else { EnterFlags::AS_BOT },
             password: None,
         })
         .await
@@ -576,6 +621,31 @@ async fn create_bot(
         }).await;
     }
 
+    // Spawn voice streaming task with its own 20ms interval (matching MetaVoiceChat 50fps)
+    let voice_instance = instance.clone();
+    let voice_shutdown = shutdown.clone();
+    let voice_index = index;
+    if let Some(packets) = audio_file {
+        tokio::spawn(async move {
+            // 20ms = 50fps, matching Opus 20ms frame size
+            let mut voice_interval = tokio::time::interval(tokio::time::Duration::from_millis(20));
+            let start = std::time::Instant::now();
+            for (i, packet) in packets.iter().enumerate() {
+                if voice_shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                voice_interval.tick().await;
+                let timestamp = start.elapsed().as_secs_f64();
+                if let Err(e) = voice_instance.send_voice_sample(0, 0x01, i as i32, timestamp, packet).await {
+                    warn!("[Bot {}] Voice send error: {}", voice_index, e);
+                } else if i % 50 == 0 {
+                    debug!("[Bot {}] Voice packet {}/{}", voice_index, i + 1, packets.len());
+                }
+            }
+            info!("[Bot {}] Audio playback complete", voice_index);
+        });
+    }
+
     let bot_task = tokio::spawn(async move {
         let mut tps = initial_tps;
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1000 / tps));
@@ -596,7 +666,6 @@ async fn create_bot(
                     // Check shutdown flag
                     if shutdown.load(Ordering::Relaxed) {
                         info!("[Bot {}] Shutting down gracefully...", index);
-                        // Déconnexion propre avant fermeture
                         if let Err(e) = relay
                             .disconnect(Some("Shutdown requested".to_string()))
                             .await

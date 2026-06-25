@@ -333,6 +333,34 @@ impl RelayInstance {
         Ok(())
     }
 
+    /// Send a voice sample datagram.
+    /// Wire format (after send_internal wrapper):
+    ///   [iid:u8][sub_type:u8(0x00)][channel_id:u32][level_flags:u8][frame_index:i32][timestamp:f64][sample:bytes]
+    /// Matches C# StreamRequest.Sample wire format with MetaVoiceChat frame metadata.
+    pub async fn send_voice_sample(
+        &self,
+        channel_id: u32,
+        level_flags: u8,
+        frame_index: i32,
+        timestamp: f64,
+        sample: &[u8],
+    ) -> Result<()> {
+        let mut buffer = Buffer::new();
+        buffer.write_u8(self.id as u8); // iid
+        buffer.write_u8(0x00);          // sub_type: Sample
+        buffer.write_u32(channel_id);
+        buffer.write_u8(level_flags);
+        buffer.write_i32(frame_index);
+        buffer.write_f64(timestamp);
+        buffer.write_bytes(sample);
+
+        self.relay
+            .send_internal(crate::protocol::RequestType::Stream, buffer.as_slice())
+            .await?;
+
+        Ok(())
+    }
+
     /// Query current server configuration (TPS, threshold, capacity, etc.)
     /// When flags is NONE (0x00), the server returns all current values.
     pub async fn get_server_config(&self) -> Result<ServerConfigResponse> {

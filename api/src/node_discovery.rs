@@ -1,218 +1,360 @@
 //! Automatic node gateway discovery
 //!
-//! This module implements the Nox node discovery protocol:
-//! 1. If the address is an IP or localhost, tries HTTP directly
-//! 2. For domain names, tries /.well-known/nox endpoint (HTTPS then HTTP)
-//! 3. Falls back to DNS TXT record lookup (_nox.{domain})
+//! Implements the Nox node discovery protocol with four strategies:
+//!   1. DNS SRV  — _nox._tcp.<address>
+//!   2. DNS TXT  — _nox.<address>, record value: ng=<url>
+//!   3. NodeInfo — /.well-known/nodeinfo, link rel="nox/1.0"
+//!   4. Manual   — /.well-known/nox directly (https then http)
 //!
 //! # Examples
 //! ```no_run
 //! use noxapi::node_discovery::find_node_gateway;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! // Discover from domain
 //! let gateway = find_node_gateway("example.com").await?;
-//!
-//! // With explicit port
 //! let gateway = find_node_gateway("example.com:3042").await?;
-//!
-//! // IP address
 //! let gateway = find_node_gateway("192.168.1.100").await?;
 //! # Ok(())
 //! # }
 //! ```
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde::Deserialize;
 use std::time::Duration;
 use tracing::{debug, warn};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_PORT: u16 = 3042;
+const WELL_KNOWN_PATH: &str = "/.well-known/nox";
+const NODEINFO_PATH: &str = "/.well-known/nodeinfo";
+const NOX_NODEINFO_REL: &str = "nox/1.0";
 
-/// DNS TXT record response from Google DNS API
-///
-/// ```json
-/// {
-///   "Status": 0,
-///   "Answer": [
-///     {"name": "_nox.example.com", "type": 16, "data": "\"mg=https://gateway.example.com\""}
-///   ]
-/// }
-/// ```
-///
-/// DNS TXT records should be formatted as: `mg=gateway_url`
-/// Example TXT record: `_nox.example.com TXT "mg=https://gateway.example.com"`
+// ─── NoxWellKnown document ────────────────────────────────────────────────────
+
+/// Minimal subset of the `/.well-known/nox` JSON document we need.
+#[derive(Debug, Deserialize)]
+struct NoxWellKnownDoc {
+    gateway: NoxWellKnownGateway,
+}
+
+#[derive(Debug, Deserialize)]
+struct NoxWellKnownGateway {
+    /// Full API base URL, e.g. "https://nox.example.com/api/"
+    api: String,
+}
+
+// ─── DNS-over-HTTPS response structures ──────────────────────────────────────
+
 #[derive(Debug, Deserialize)]
 struct DnsResponse {
     #[serde(rename = "Status")]
     status: i32,
     #[serde(rename = "Answer")]
-    answer: Option<Vec<DnsTxtRecord>>,
+    answer: Option<Vec<DnsRecord>>,
 }
 
 #[derive(Debug, Deserialize)]
-struct DnsTxtRecord {
+struct DnsRecord {
     data: String,
 }
 
-impl DnsTxtRecord {
-    fn parse_gateway(&self) -> Option<String> {
-        // Remove quotes from TXT record
-        let data = self.data.trim_matches('"');
+// ─── NodeInfo structures ──────────────────────────────────────────────────────
 
-        // Split by semicolon and find mg= entry
-        for part in data.split(';') {
-            let kv: Vec<&str> = part.split('=').collect();
-            if kv.len() == 2 && kv[0].trim() == "mg" {
-                return Some(kv[1].trim().to_string());
-            }
+#[derive(Debug, Deserialize)]
+struct NodeInfoLinks {
+    links: Option<Vec<NodeInfoLink>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeInfoLink {
+    rel: String,
+    href: String,
+}
+
+// ─── SRV record ───────────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+struct SrvRecord {
+    priority: u16,
+    weight: u16,
+    port: u16,
+    target: String,
+}
+
+impl SrvRecord {
+    /// Parse a DNS SRV data string: "<priority> <weight> <port> <target>"
+    fn parse(data: &str) -> Option<Self> {
+        let parts: Vec<&str> = data.split_whitespace().collect();
+        if parts.len() < 4 {
+            return None;
         }
-        None
+        Some(SrvRecord {
+            priority: parts[0].parse().ok()?,
+            weight: parts[1].parse().ok()?,
+            port: parts[2].parse().ok()?,
+            target: parts[3].trim_end_matches('.').to_string(),
+        })
     }
 }
 
-/// Discover node gateway from address
+// ─── Main discovery function ──────────────────────────────────────────────────
+
+/// Discover the API gateway URL for a given address.
 ///
-/// Implements automatic gateway discovery with multiple fallback strategies:
-/// - Direct connection for IP addresses
-/// - .well-known/nox endpoint checking (HTTPS → HTTP)
-/// - DNS TXT record resolution via Google DNS API
-///
-/// # Arguments
-/// * `address` - Domain name, IP address, or URL with optional port
-///
-/// # Returns
-/// Discovered gateway URL or the original address if discovery fails
+/// Tries four strategies in order, returning the first successful result:
+///   1. DNS SRV  — _nox._tcp.<address>
+///   2. DNS TXT  — _nox.<address>, record value: ng=<url>
+///   3. NodeInfo — /.well-known/nodeinfo, link rel="nox/1.0"
+///   4. Manual   — /.well-known/nox directly (https then http)
 pub async fn find_node_gateway(address: &str) -> Result<String> {
     debug!("Starting gateway discovery for: {}", address);
 
-    // Parse address to extract host and port
-    let (host, port) = parse_address(address)?;
+    let (host, explicit_port) = parse_address(address)?;
 
-    // Strategy 1: If it's an IP address or localhost, try direct connection
+    // For IP addresses or localhost: skip DNS strategies, try direct connection
     if is_ip_or_localhost(&host) {
-        debug!("Address is IP/localhost, attempting direct connection");
-        if try_well_known(&format!("http://{}:{}", host, port)).await {
-            let url = format!("http://{}:{}", host, port);
-            debug!("Direct connection successful: {}", url);
-            return Ok(url);
-        }
-    }
-
-    // Strategy 2: For domain names, try .well-known endpoint
-    if !is_ip_or_localhost(&host) {
-        debug!("Trying .well-known/nox endpoint for domain: {}", host);
-
-        // Try HTTPS first
-        if try_well_known(&format!("https://{}:{}", host, port)).await {
-            let url = format!("https://{}:{}", host, port);
-            debug!("Found gateway via HTTPS .well-known: {}", url);
-            return Ok(url);
-        }
-
-        // Fallback to HTTP
-        if try_well_known(&format!("http://{}:{}", host, port)).await {
-            let url = format!("http://{}:{}", host, port);
-            debug!("Found gateway via HTTP .well-known: {}", url);
-            return Ok(url);
-        }
-    }
-
-    // Strategy 3: DNS TXT record lookup
-    if !is_ip_or_localhost(&host) {
-        debug!("Attempting DNS TXT lookup for: {}", host);
-        match resolve_dns_txt(&host).await {
-            Ok(gateways) if !gateways.is_empty() => {
-                debug!("Found {} gateways via DNS TXT", gateways.len());
-                return Ok(gateways[0].clone());
+        debug!("Address is IP/localhost, trying direct connection");
+        let port = explicit_port.unwrap_or(DEFAULT_PORT);
+        for scheme in ["https", "http"] {
+            let well_known_url = format!("{}://{}:{}{}", scheme, host, port, WELL_KNOWN_PATH);
+            if let Some(base) = fetch_gateway_from_well_known(&well_known_url).await {
+                debug!("Direct connection successful: {}", base);
+                return Ok(base);
             }
-            Ok(_) => debug!("No gateways found in DNS TXT"),
-            Err(e) => warn!("DNS TXT lookup failed: {}", e),
+        }
+        let fallback = format!("http://{}:{}", host, port);
+        warn!("Direct connection failed, using fallback: {}", fallback);
+        return Ok(fallback);
+    }
+
+    // Strategy 1: DNS SRV
+    debug!("Strategy 1 – DNS SRV for _nox._tcp.{}", host);
+    if let Some(url) = discover_via_srv(&host).await {
+        return Ok(url);
+    }
+
+    // Strategy 2: DNS TXT
+    debug!("Strategy 2 – DNS TXT for _nox.{}", host);
+    if let Some(url) = discover_via_txt(&host).await {
+        return Ok(url);
+    }
+
+    // Strategy 3: NodeInfo
+    debug!("Strategy 3 – NodeInfo for {}", host);
+    if let Some(url) = discover_via_nodeinfo(&host, explicit_port).await {
+        return Ok(url);
+    }
+
+    // Strategy 4: Manual well-known (standard ports; honour explicit port if given)
+    debug!("Strategy 4 – Manual well-known for {}", host);
+    let port_suffix = explicit_port
+        .map(|p| format!(":{}", p))
+        .unwrap_or_default();
+    for scheme in ["https", "http"] {
+        let well_known_url = format!("{}://{}{}{}", scheme, host, port_suffix, WELL_KNOWN_PATH);
+        if let Some(base) = fetch_gateway_from_well_known(&well_known_url).await {
+            debug!("Found gateway via manual well-known: {}", base);
+            return Ok(base);
         }
     }
 
-    // Strategy 4: Return the original address
-    debug!("All discovery strategies failed, using original address");
-    Ok(format!("http://{}:{}", host, port))
+    // Fallback: original address with default port
+    let port = explicit_port.unwrap_or(DEFAULT_PORT);
+    let fallback = format!("http://{}:{}", host, port);
+    warn!("All discovery strategies failed, falling back to: {}", fallback);
+    Ok(fallback)
 }
 
-/// Check if address is an IP or localhost
+// ─── Strategies ──────────────────────────────────────────────────────────────
+
+/// Strategy 1 — DNS SRV: _nox._tcp.<host>
+async fn discover_via_srv(host: &str) -> Option<String> {
+    let dns_url = format!(
+        "https://dns.google/resolve?name=_nox._tcp.{}&type=SRV",
+        host
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(TIMEOUT)
+        .build()
+        .ok()?;
+
+    let resp = client.get(&dns_url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+
+    let dns: DnsResponse = resp.json().await.ok()?;
+    if dns.status != 0 {
+        return None;
+    }
+
+    let mut records: Vec<SrvRecord> = dns
+        .answer?
+        .iter()
+        .filter_map(|r| SrvRecord::parse(&r.data))
+        .collect();
+
+    if records.is_empty() {
+        return None;
+    }
+
+    // Lower priority first, then higher weight first
+    records.sort_by(|a, b| a.priority.cmp(&b.priority).then(b.weight.cmp(&a.weight)));
+
+    for record in &records {
+        for scheme in ["https", "http"] {
+            let well_known_url = format!("{}://{}:{}{}", scheme, record.target, record.port, WELL_KNOWN_PATH);
+            if let Some(base) = fetch_gateway_from_well_known(&well_known_url).await {
+                debug!("Found gateway via SRV: {}", base);
+                return Some(base);
+            }
+        }
+    }
+
+    None
+}
+
+/// Strategy 2 — DNS TXT: _nox.<host>, look for ng=<url>
+async fn discover_via_txt(host: &str) -> Option<String> {
+    let dns_url = format!(
+        "https://dns.google/resolve?name=_nox.{}&type=TXT",
+        host
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(TIMEOUT)
+        .build()
+        .ok()?;
+
+    let resp = client.get(&dns_url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+
+    let dns: DnsResponse = resp.json().await.ok()?;
+    if dns.status != 0 {
+        return None;
+    }
+
+    for record in dns.answer.unwrap_or_default() {
+        if let Some(well_known_url) = parse_ng_from_txt(&record.data) {
+            // ng= value is the full /.well-known/nox URL; fetch it to get the API base
+            if let Some(base) = fetch_gateway_from_well_known(&well_known_url).await {
+                debug!("Found gateway via TXT ng= record: {}", base);
+                return Some(base);
+            }
+        }
+    }
+
+    None
+}
+
+/// Strategy 3 — NodeInfo: /.well-known/nodeinfo, link rel="nox/1.0"
+async fn discover_via_nodeinfo(host: &str, explicit_port: Option<u16>) -> Option<String> {
+    let port_suffix = explicit_port
+        .map(|p| format!(":{}", p))
+        .unwrap_or_default();
+
+    let client = reqwest::Client::builder()
+        .timeout(TIMEOUT)
+        .build()
+        .ok()?;
+
+    for scheme in ["https", "http"] {
+        let url = format!("{}://{}{}{}", scheme, host, port_suffix, NODEINFO_PATH);
+
+        let resp = match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => r,
+            _ => continue,
+        };
+
+        let doc: NodeInfoLinks = match resp.json().await {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        let links = match doc.links {
+            Some(l) => l,
+            None => continue,
+        };
+
+        let link = match links.into_iter().find(|l| l.rel == NOX_NODEINFO_REL) {
+            Some(l) => l,
+            None => continue,
+        };
+
+        if let Some(base) = fetch_gateway_from_well_known(&link.href).await {
+            debug!("Found gateway via NodeInfo: {}", base);
+            return Some(base);
+        }
+    }
+
+    None
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Parse `ng=<url>` from a DNS TXT record value (may be quoted, semicolon-separated).
+fn parse_ng_from_txt(data: &str) -> Option<String> {
+    let data = data.trim_matches('"');
+    for part in data.split(|c: char| c == ';' || c == ' ') {
+        let part = part.trim();
+        if let Some(val) = part.strip_prefix("ng=") {
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Fetch the `/.well-known/nox` document at `url`, parse it, and return the
+/// API base URL derived from `gateway.api` (without the trailing `/api/` path).
+/// Returns `None` on any error (network, non-2xx, parse failure).
+async fn fetch_gateway_from_well_known(url: &str) -> Option<String> {
+    let client = reqwest::Client::builder().timeout(TIMEOUT).build().ok()?;
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let doc: NoxWellKnownDoc = resp.json().await.ok()?;
+    // Derive the server root by stripping the trailing /api path
+    let api = doc.gateway.api.trim_end_matches('/');
+    let base = api
+        .strip_suffix("/api")
+        .unwrap_or(api)
+        .trim_end_matches('/')
+        .to_string();
+    if base.is_empty() {
+        return None;
+    }
+    Some(base)
+}
+
+/// Check if address is an IP or localhost.
 fn is_ip_or_localhost(address: &str) -> bool {
     address.parse::<std::net::IpAddr>().is_ok() || address == "localhost"
 }
 
-/// Parse address into host and port components
-fn parse_address(address: &str) -> Result<(String, u16)> {
-    // Remove protocol if present
+/// Parse address into `(host, explicit_port)`. Port is `None` if not specified.
+fn parse_address(address: &str) -> Result<(String, Option<u16>)> {
     let cleaned = address
         .trim_start_matches("http://")
         .trim_start_matches("https://");
 
-    // Try to parse as URL with port
     if let Some(colon_pos) = cleaned.rfind(':') {
         let host = &cleaned[..colon_pos];
-        let port_str = &cleaned[colon_pos + 1..];
-
-        // Remove trailing path if present
-        let port_str = port_str.split('/').next().unwrap_or(port_str);
-
+        let port_str = cleaned[colon_pos + 1..].split('/').next().unwrap_or("");
         if let Ok(port) = port_str.parse::<u16>() {
-            return Ok((host.to_string(), port));
+            return Ok((host.to_string(), Some(port)));
         }
     }
 
-    // No port specified, use default
-    Ok((cleaned.to_string(), DEFAULT_PORT))
+    Ok((cleaned.to_string(), None))
 }
 
-/// Test if /.well-known/nox endpoint responds
-async fn try_well_known(base_url: &str) -> bool {
-    let url = format!("{}/.well-known/nox", base_url);
-
-    match reqwest::Client::builder().timeout(TIMEOUT).build() {
-        Ok(client) => match client.get(&url).send().await {
-            Ok(response) => response.status().is_success(),
-            Err(_) => false,
-        },
-        Err(_) => false,
-    }
-}
-
-/// Resolve node gateway from DNS TXT record (_nox.{domain})
-async fn resolve_dns_txt(domain: &str) -> Result<Vec<String>> {
-    let url = format!("https://dns.google/resolve?name=_nox.{}&type=TXT", domain);
-
-    let client = reqwest::Client::builder().timeout(TIMEOUT).build()?;
-
-    let response = client.get(&url).send().await?;
-
-    if !response.status().is_success() {
-        return Err(anyhow!("DNS query failed"));
-    }
-
-    let dns_response: DnsResponse = response.json().await?;
-
-    if dns_response.status != 0 {
-        return Err(anyhow!("DNS query returned error status"));
-    }
-
-    let mut gateways = Vec::new();
-
-    if let Some(answers) = dns_response.answer {
-        for record in answers {
-            if let Some(gateway) = record.parse_gateway() {
-                gateways.push(gateway);
-            }
-        }
-    }
-
-    if gateways.is_empty() {
-        return Err(anyhow!("No gateway found in DNS TXT records"));
-    }
-
-    Ok(gateways)
-}
+// ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -231,46 +373,45 @@ mod tests {
     fn test_parse_address() {
         assert_eq!(
             parse_address("example.com").unwrap(),
-            ("example.com".to_string(), DEFAULT_PORT)
+            ("example.com".to_string(), None)
         );
         assert_eq!(
             parse_address("example.com:8080").unwrap(),
-            ("example.com".to_string(), 8080)
+            ("example.com".to_string(), Some(8080))
         );
         assert_eq!(
             parse_address("http://example.com:8080").unwrap(),
-            ("example.com".to_string(), 8080)
+            ("example.com".to_string(), Some(8080))
         );
         assert_eq!(
             parse_address("https://example.com").unwrap(),
-            ("example.com".to_string(), DEFAULT_PORT)
+            ("example.com".to_string(), None)
         );
     }
 
     #[test]
-    fn test_parse_gateway_from_txt() {
-        let record = DnsTxtRecord {
-            data: "\"mg=https://gateway.example.com\"".to_string(),
-        };
+    fn test_parse_ng_from_txt() {
         assert_eq!(
-            record.parse_gateway(),
+            parse_ng_from_txt("\"ng=https://gateway.example.com\""),
             Some("https://gateway.example.com".to_string())
         );
+        assert_eq!(
+            parse_ng_from_txt("ng=https://gateway.example.com"),
+            Some("https://gateway.example.com".to_string())
+        );
+        assert_eq!(
+            parse_ng_from_txt("v=nox;ng=https://gateway.example.com;other=value"),
+            Some("https://gateway.example.com".to_string())
+        );
+        assert_eq!(parse_ng_from_txt("v=nox;other=value"), None);
+    }
 
-        let record = DnsTxtRecord {
-            data: "mg=https://gateway.example.com".to_string(),
-        };
-        assert_eq!(
-            record.parse_gateway(),
-            Some("https://gateway.example.com".to_string())
-        );
-
-        let record = DnsTxtRecord {
-            data: "v=nox;mg=https://gateway.example.com;other=value".to_string(),
-        };
-        assert_eq!(
-            record.parse_gateway(),
-            Some("https://gateway.example.com".to_string())
-        );
+    #[test]
+    fn test_parse_srv_record() {
+        let record = SrvRecord::parse("10 20 443 gateway.example.com.").unwrap();
+        assert_eq!(record.priority, 10);
+        assert_eq!(record.weight, 20);
+        assert_eq!(record.port, 443);
+        assert_eq!(record.target, "gateway.example.com");
     }
 }

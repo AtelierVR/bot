@@ -9,7 +9,7 @@
     "clean": "cargo clean",
     "clippy": "cargo clippy -- -D warnings",
     "fmt": "cargo fmt --all -- --check",
-    "dev": "cargo run --release --bin noxbot --"
+    "dev": "cargo build --release --bin noxbot && cargo run --release --bin noxbot --"
   },
   "keywords": [
     "nox",

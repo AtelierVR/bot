@@ -20,7 +20,7 @@ pub enum RequestType {
     Properties = 0x0F,
     PlayerUpdate = 0x12,
     Sessions = 0x13,
-    Voice = 0x14,
+    Stream = 0x14,
     Event = 0x15,
 }
 
@@ -48,7 +48,7 @@ pub enum ResponseType {
     Leave = 0x11,
     PlayerUpdate = 0x12,
     Sessions = 0x13,
-    Voice = 0x14,
+    Stream = 0x14,
     Event = 0x15,
 }
 
@@ -74,7 +74,7 @@ impl RequestType {
             0x0F => Some(Self::Properties),
             0x12 => Some(Self::PlayerUpdate),
             0x13 => Some(Self::Sessions),
-            0x14 => Some(Self::Voice),
+            0x14 => Some(Self::Stream),
             0x15 => Some(Self::Event),
             _ => None,
         }
@@ -105,7 +105,7 @@ impl ResponseType {
             0x11 => Some(Self::Leave),
             0x12 => Some(Self::PlayerUpdate),
             0x13 => Some(Self::Sessions),
-            0x14 => Some(Self::Voice),
+            0x14 => Some(Self::Stream),
             0x15 => Some(Self::Event),
             _ => None,
         }

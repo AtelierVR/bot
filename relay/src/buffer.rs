@@ -49,6 +49,10 @@ impl Buffer {
         self.data.put_f32(value); // Uses network byte order (big-endian) by default
     }
 
+    pub fn write_f64(&mut self, value: f64) {
+        self.data.put_f64(value); // Uses network byte order (big-endian) by default
+    }
+
     pub fn write_bytes(&mut self, bytes: &[u8]) {
         self.data.put_slice(bytes);
     }
