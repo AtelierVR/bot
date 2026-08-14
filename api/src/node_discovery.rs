@@ -147,9 +147,7 @@ pub async fn find_node_gateway(address: &str) -> Result<String> {
 
     // Strategy 4: Manual well-known (standard ports; honour explicit port if given)
     debug!("Strategy 4 – Manual well-known for {}", host);
-    let port_suffix = explicit_port
-        .map(|p| format!(":{}", p))
-        .unwrap_or_default();
+    let port_suffix = explicit_port.map(|p| format!(":{}", p)).unwrap_or_default();
     for scheme in ["https", "http"] {
         let well_known_url = format!("{}://{}{}{}", scheme, host, port_suffix, WELL_KNOWN_PATH);
         if let Some(base) = fetch_gateway_from_well_known(&well_known_url).await {
@@ -161,7 +159,10 @@ pub async fn find_node_gateway(address: &str) -> Result<String> {
     // Fallback: original address with default port
     let port = explicit_port.unwrap_or(DEFAULT_PORT);
     let fallback = format!("http://{}:{}", host, port);
-    warn!("All discovery strategies failed, falling back to: {}", fallback);
+    warn!(
+        "All discovery strategies failed, falling back to: {}",
+        fallback
+    );
     Ok(fallback)
 }
 
@@ -174,10 +175,7 @@ async fn discover_via_srv(host: &str) -> Option<String> {
         host
     );
 
-    let client = reqwest::Client::builder()
-        .timeout(TIMEOUT)
-        .build()
-        .ok()?;
+    let client = reqwest::Client::builder().timeout(TIMEOUT).build().ok()?;
 
     let resp = client.get(&dns_url).send().await.ok()?;
     if !resp.status().is_success() {
@@ -204,7 +202,10 @@ async fn discover_via_srv(host: &str) -> Option<String> {
 
     for record in &records {
         for scheme in ["https", "http"] {
-            let well_known_url = format!("{}://{}:{}{}", scheme, record.target, record.port, WELL_KNOWN_PATH);
+            let well_known_url = format!(
+                "{}://{}:{}{}",
+                scheme, record.target, record.port, WELL_KNOWN_PATH
+            );
             if let Some(base) = fetch_gateway_from_well_known(&well_known_url).await {
                 debug!("Found gateway via SRV: {}", base);
                 return Some(base);
@@ -217,15 +218,9 @@ async fn discover_via_srv(host: &str) -> Option<String> {
 
 /// Strategy 2 — DNS TXT: _nox.<host>, look for ng=<url>
 async fn discover_via_txt(host: &str) -> Option<String> {
-    let dns_url = format!(
-        "https://dns.google/resolve?name=_nox.{}&type=TXT",
-        host
-    );
+    let dns_url = format!("https://dns.google/resolve?name=_nox.{}&type=TXT", host);
 
-    let client = reqwest::Client::builder()
-        .timeout(TIMEOUT)
-        .build()
-        .ok()?;
+    let client = reqwest::Client::builder().timeout(TIMEOUT).build().ok()?;
 
     let resp = client.get(&dns_url).send().await.ok()?;
     if !resp.status().is_success() {
@@ -252,14 +247,9 @@ async fn discover_via_txt(host: &str) -> Option<String> {
 
 /// Strategy 3 — NodeInfo: /.well-known/nodeinfo, link rel="nox/1.0"
 async fn discover_via_nodeinfo(host: &str, explicit_port: Option<u16>) -> Option<String> {
-    let port_suffix = explicit_port
-        .map(|p| format!(":{}", p))
-        .unwrap_or_default();
+    let port_suffix = explicit_port.map(|p| format!(":{}", p)).unwrap_or_default();
 
-    let client = reqwest::Client::builder()
-        .timeout(TIMEOUT)
-        .build()
-        .ok()?;
+    let client = reqwest::Client::builder().timeout(TIMEOUT).build().ok()?;
 
     for scheme in ["https", "http"] {
         let url = format!("{}://{}{}{}", scheme, host, port_suffix, NODEINFO_PATH);
@@ -298,7 +288,7 @@ async fn discover_via_nodeinfo(host: &str, explicit_port: Option<u16>) -> Option
 /// Parse `ng=<url>` from a DNS TXT record value (may be quoted, semicolon-separated).
 fn parse_ng_from_txt(data: &str) -> Option<String> {
     let data = data.trim_matches('"');
-    for part in data.split(|c: char| c == ';' || c == ' ') {
+    for part in data.split([';', ' ']) {
         let part = part.trim();
         if let Some(val) = part.strip_prefix("ng=") {
             if !val.is_empty() {

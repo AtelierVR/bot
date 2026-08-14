@@ -293,26 +293,27 @@ async fn main() -> Result<()> {
 
     // Read and parse audio file if --play is specified
     let audio_packets: Option<Vec<Vec<u8>>> = match &args.play {
-        Some(path) => {
-            match std::fs::read(path) {
-                Ok(data) => {
-                    match audio::parse_ogg_opus(&data) {
-                        Ok(packets) => {
-                            info!("Loaded Ogg Opus file {:?}: {} packets ({} bytes total)", path, packets.len(), data.len());
-                            Some(packets)
-                        }
-                        Err(e) => {
-                            error!("Failed to parse Ogg Opus file {:?}: {}", path, e);
-                            None
-                        }
-                    }
+        Some(path) => match std::fs::read(path) {
+            Ok(data) => match audio::parse_ogg_opus(&data) {
+                Ok(packets) => {
+                    info!(
+                        "Loaded Ogg Opus file {:?}: {} packets ({} bytes total)",
+                        path,
+                        packets.len(),
+                        data.len()
+                    );
+                    Some(packets)
                 }
                 Err(e) => {
-                    error!("Failed to read audio file {:?}: {}", path, e);
+                    error!("Failed to parse Ogg Opus file {:?}: {}", path, e);
                     None
                 }
+            },
+            Err(e) => {
+                error!("Failed to read audio file {:?}: {}", path, e);
+                None
             }
-        }
+        },
         None => None,
     };
 
@@ -393,6 +394,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create_bot(
     index: usize,
     relay_addr: &str,
@@ -505,7 +507,11 @@ async fn create_bot(
         .enter(EnterRequest {
             instance_id: relay_instance_info.id,
             display: format!("RustBot-{}", index),
-            flags: if human { EnterFlags::empty() } else { EnterFlags::AS_BOT },
+            flags: if human {
+                EnterFlags::empty()
+            } else {
+                EnterFlags::AS_BOT
+            },
             password: None,
         })
         .await
@@ -513,7 +519,12 @@ async fn create_bot(
 
     // Extract enter response fields
     let (bot_player_id, initial_tps) = match enter_response {
-        noxrelay::EnterResponse::Success { player_id, entity_id, tps, property_resend_interval } => {
+        noxrelay::EnterResponse::Success {
+            player_id,
+            entity_id,
+            tps,
+            property_resend_interval,
+        } => {
             info!(
                 "[Bot {}] Entered instance: player_id={}, entity_id={}, tps={}, property_resend_interval={}",
                 index, player_id, entity_id, tps, property_resend_interval
@@ -521,7 +532,10 @@ async fn create_bot(
             (player_id, tps as u64)
         }
         noxrelay::EnterResponse::Error { code, reason } => {
-            warn!("[Bot {}] Enter failed: code={}, reason={}", index, code, reason);
+            warn!(
+                "[Bot {}] Enter failed: code={}, reason={}",
+                index, code, reason
+            );
             return Err(anyhow::anyhow!("Enter failed: {}", reason));
         }
     };
@@ -530,12 +544,14 @@ async fn create_bot(
     let avatar_future = {
         let nox = nox.clone();
         let token = token.clone();
-        let index = index;
         async move {
             if let Some(tok) = token {
                 match nox.get_me(&tok).await.data {
                     Some(user) => {
-                        info!("[Bot {}] User profile: {} ({})", index, user.display_name, user.username);
+                        info!(
+                            "[Bot {}] User profile: {} ({})",
+                            index, user.display_name, user.username
+                        );
                         user.avatar
                     }
                     None => {
@@ -586,7 +602,10 @@ async fn create_bot(
                 Err(e) => warn!("[Bot {}] Failed to set avatar: {}", index, e),
             }
         } else {
-            warn!("[Bot {}] Could not parse avatar id from '{}'", index, avatar_str);
+            warn!(
+                "[Bot {}] Could not parse avatar id from '{}'",
+                index, avatar_str
+            );
         }
     } else {
         info!("[Bot {}] User has no default avatar set", index);
@@ -594,7 +613,12 @@ async fn create_bot(
 
     // Select movement
     let movement = movements::get_movement(movement_name, speed_override);
-    info!("[Bot {}] Movement: {} (speed: {})", index, movement.name(), movement.speed());
+    info!(
+        "[Bot {}] Movement: {} (speed: {})",
+        index,
+        movement.name(),
+        movement.speed()
+    );
     let mut movement_state = movement.initialize(index);
     movement_state.player_id = bot_player_id;
 
@@ -627,7 +651,9 @@ async fn create_bot(
                     }
                 }
                 if let Some(new_threshold) = config.threshold {
-                    instance.update_threshold_from_broadcast(new_threshold).await;
+                    instance
+                        .update_threshold_from_broadcast(new_threshold)
+                        .await;
                 }
             });
         })
@@ -645,24 +671,29 @@ async fn create_bot(
     if listen == Some(index) {
         let bot_index = index;
         let playback = voice_playback.clone();
-        relay.set_event_callback(move |event| {
-            if let RelayEvent::Stream(stream) = &event {
-                if stream.sub_type == 0 {
-                    if let Some(ref player) = playback {
-                        player.play_frame(stream.player_id, stream.frame_index, &stream.sample);
-                        debug!(
-                            "[Bot {}] Voice frame: speaker={} frame={} bytes={}",
-                            bot_index, stream.player_id, stream.frame_index, stream.sample.len()
-                        );
+        relay
+            .set_event_callback(move |event| {
+                if let RelayEvent::Stream(stream) = &event {
+                    if stream.sub_type == 0 {
+                        if let Some(ref player) = playback {
+                            player.play_frame(stream.player_id, stream.frame_index, &stream.sample);
+                            debug!(
+                                "[Bot {}] Voice frame: speaker={} frame={} bytes={}",
+                                bot_index,
+                                stream.player_id,
+                                stream.frame_index,
+                                stream.sample.len()
+                            );
+                        }
+                        return;
                     }
-                    return;
                 }
-            }
-            match serde_json::to_string(&event) {
-                Ok(json) => info!("[Bot {}] RX {}", bot_index, json),
-                Err(e) => warn!("[Bot {}] Failed to serialize event: {}", bot_index, e),
-            }
-        }).await;
+                match serde_json::to_string(&event) {
+                    Ok(json) => info!("[Bot {}] RX {}", bot_index, json),
+                    Err(e) => warn!("[Bot {}] Failed to serialize event: {}", bot_index, e),
+                }
+            })
+            .await;
     }
 
     // Spawn voice streaming task with its own 20ms interval (matching MetaVoiceChat 50fps)
@@ -680,10 +711,18 @@ async fn create_bot(
                 }
                 voice_interval.tick().await;
                 let timestamp = start.elapsed().as_secs_f64();
-                if let Err(e) = voice_instance.send_voice_sample(0, 0x01, i as i32, timestamp, packet).await {
+                if let Err(e) = voice_instance
+                    .send_voice_sample(0, 0x01, i as i32, timestamp, packet)
+                    .await
+                {
                     warn!("[Bot {}] Voice send error: {}", voice_index, e);
                 } else if i % 50 == 0 {
-                    debug!("[Bot {}] Voice packet {}/{}", voice_index, i + 1, packets.len());
+                    debug!(
+                        "[Bot {}] Voice packet {}/{}",
+                        voice_index,
+                        i + 1,
+                        packets.len()
+                    );
                 }
             }
             info!("[Bot {}] Audio playback complete", voice_index);

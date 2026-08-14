@@ -122,10 +122,7 @@ impl Nox {
     }
 
     pub async fn get_me(&self, token: &str) -> NoxResponse<User> {
-        let url = format!(
-            "{}/api/users/@me",
-            self.base_url.trim_end_matches('/')
-        );
+        let url = format!("{}/api/users/@me", self.base_url.trim_end_matches('/'));
         debug!("Fetching current user from: {}", url);
 
         match self.client.get(&url).bearer_auth(token).send().await {
@@ -159,11 +156,7 @@ impl Nox {
     }
 
     pub async fn get_user_by_id(&self, id: u32, token: Option<&str>) -> NoxResponse<User> {
-        let url = format!(
-            "{}/api/users/{}",
-            self.base_url.trim_end_matches('/'),
-            id
-        );
+        let url = format!("{}/api/users/{}", self.base_url.trim_end_matches('/'), id);
         debug!("Fetching user by id from: {}", url);
 
         let mut req = self.client.get(&url);

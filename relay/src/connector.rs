@@ -134,17 +134,17 @@ impl QuicConnector {
 
         // Must match the server's ALPN token (tls_config.alpn_protocols = vec![b"relay".to_vec()])
         crypto.alpn_protocols = vec![b"relay".to_vec()];
-        
+
         // Enable QUIC datagrams for server broadcasts
         let mut transport = quinn::TransportConfig::default();
-        transport.datagram_receive_buffer_size(Some(65536));  // 64KB buffer for datagrams
+        transport.datagram_receive_buffer_size(Some(65536)); // 64KB buffer for datagrams
         transport.datagram_send_buffer_size(65536);
-        
+
         let mut client_config = ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?,
         ));
         client_config.transport_config(Arc::new(transport));
-        
+
         Ok(client_config)
     }
 }
@@ -272,7 +272,9 @@ impl QuicConnector {
     /// Returns (type_byte, payload) where type_byte is the packet type and payload is the body.
     pub async fn accept_uni_packet(&self) -> Result<(u8, Vec<u8>)> {
         if let Some(ref conn) = self.connection {
-            let mut recv = conn.accept_uni().await
+            let mut recv = conn
+                .accept_uni()
+                .await
                 .map_err(|e| anyhow::anyhow!("accept_uni error: {}", e))?;
 
             // Read the 2-byte inclusive length prefix (big-endian)

@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use noxrelay::{PropertiesRequest, Quaternion, RelayInstance, Transform, TransformRequest, TransformType, Vector3};
+use noxrelay::{
+    PropertiesRequest, Quaternion, RelayInstance, Transform, TransformRequest, TransformType,
+    Vector3,
+};
 use std::collections::HashMap;
 
 #[async_trait]
@@ -67,8 +70,14 @@ async fn send_velocity_properties(
     }
 
     let mut params: HashMap<i32, Vec<u8>> = HashMap::new();
-    params.insert(crc32fast::hash(b"VelocityX") as i32, vx.to_be_bytes().to_vec());
-    params.insert(crc32fast::hash(b"VelocityZ") as i32, vz.to_be_bytes().to_vec());
+    params.insert(
+        crc32fast::hash(b"VelocityX") as i32,
+        vx.to_be_bytes().to_vec(),
+    );
+    params.insert(
+        crc32fast::hash(b"VelocityZ") as i32,
+        vz.to_be_bytes().to_vec(),
+    );
 
     let _ = instance
         .set_properties(PropertiesRequest {
@@ -373,14 +382,46 @@ impl Movement for CrossMovement {
         let t = phase.fract();
 
         let (vx, vz) = match seg {
-            0 => { state.position.x = 0.0; state.position.z = t * self.arm;           (0.0,          self.speed) }
-            1 => { state.position.x = 0.0; state.position.z = (1.0 - t) * self.arm;  (0.0,         -self.speed) }
-            2 => { state.position.x = t * self.arm;           state.position.z = 0.0; ( self.speed,  0.0) }
-            3 => { state.position.x = (1.0 - t) * self.arm;  state.position.z = 0.0; (-self.speed,  0.0) }
-            4 => { state.position.x = 0.0; state.position.z = -t * self.arm;          (0.0,         -self.speed) }
-            5 => { state.position.x = 0.0; state.position.z = -(1.0 - t) * self.arm; (0.0,          self.speed) }
-            6 => { state.position.x = -t * self.arm;          state.position.z = 0.0; (-self.speed,  0.0) }
-            _ => { state.position.x = -(1.0 - t) * self.arm; state.position.z = 0.0; ( self.speed,  0.0) }
+            0 => {
+                state.position.x = 0.0;
+                state.position.z = t * self.arm;
+                (0.0, self.speed)
+            }
+            1 => {
+                state.position.x = 0.0;
+                state.position.z = (1.0 - t) * self.arm;
+                (0.0, -self.speed)
+            }
+            2 => {
+                state.position.x = t * self.arm;
+                state.position.z = 0.0;
+                (self.speed, 0.0)
+            }
+            3 => {
+                state.position.x = (1.0 - t) * self.arm;
+                state.position.z = 0.0;
+                (-self.speed, 0.0)
+            }
+            4 => {
+                state.position.x = 0.0;
+                state.position.z = -t * self.arm;
+                (0.0, -self.speed)
+            }
+            5 => {
+                state.position.x = 0.0;
+                state.position.z = -(1.0 - t) * self.arm;
+                (0.0, self.speed)
+            }
+            6 => {
+                state.position.x = -t * self.arm;
+                state.position.z = 0.0;
+                (-self.speed, 0.0)
+            }
+            _ => {
+                state.position.x = -(1.0 - t) * self.arm;
+                state.position.z = 0.0;
+                (self.speed, 0.0)
+            }
         };
 
         let _ = instance
@@ -427,8 +468,14 @@ impl Movement for TargetMovement {
     fn initialize(&self, index: usize) -> MovementState {
         let mut state = MovementState::new(index as f32 * 0.1, 0.0, 0.0, 0);
         // Pick an initial random target
-        state.custom_data.insert("target_x".to_string(), ((rand::random::<f32>() - 0.5) * self.range * 2.0) as f64);
-        state.custom_data.insert("target_z".to_string(), ((rand::random::<f32>() - 0.5) * self.range * 2.0) as f64);
+        state.custom_data.insert(
+            "target_x".to_string(),
+            ((rand::random::<f32>() - 0.5) * self.range * 2.0) as f64,
+        );
+        state.custom_data.insert(
+            "target_z".to_string(),
+            ((rand::random::<f32>() - 0.5) * self.range * 2.0) as f64,
+        );
         state
     }
 
@@ -564,7 +611,11 @@ pub fn get_movement(name: &str, speed_override: Option<f32>) -> Box<dyn Movement
         None => {
             let all = get_movements(None);
             let names: Vec<&str> = all.iter().map(|m| m.name()).collect();
-            panic!("Unknown movement '{}'. Available: random, {}", name, names.join(", "));
+            panic!(
+                "Unknown movement '{}'. Available: random, {}",
+                name,
+                names.join(", ")
+            );
         }
     }
 }

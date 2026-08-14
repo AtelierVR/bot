@@ -45,12 +45,12 @@ impl RelayInstance {
         let mut tps = self.current_tps.write().await;
         if *tps != new_tps {
             *tps = new_tps;
-            
+
             // Notify listener if set
             if let Some(tx) = self.tps_change_tx.read().await.as_ref() {
                 let _ = tx.send(new_tps);
             }
-            
+
             true
         } else {
             false
@@ -278,11 +278,11 @@ impl RelayInstance {
         request: AvatarChangeRequest,
     ) -> Result<AvatarChangeResponse> {
         let mut buffer = Buffer::new();
-        buffer.write_u8(self.id as u8);         // iid: u8
-        buffer.write_u16(request.player_id);    // pid: u16
-        buffer.write_u32(request.avatar_id as u32); // avatar_id: u32
+        buffer.write_u8(self.id as u8); // iid: u8
+        buffer.write_u16(request.player_id); // pid: u16
+        buffer.write_u32(request.avatar_id); // avatar_id: u32
         buffer.write_string(&request.avatar_server); // server: string
-        buffer.write_u16(request.version);          // version: u16
+        buffer.write_u16(request.version); // version: u16
 
         let response = self
             .relay
@@ -347,7 +347,7 @@ impl RelayInstance {
     ) -> Result<()> {
         let mut buffer = Buffer::new();
         buffer.write_u8(self.id as u8); // iid
-        buffer.write_u8(0x00);          // sub_type: Sample
+        buffer.write_u8(0x00); // sub_type: Sample
         buffer.write_u32(channel_id);
         buffer.write_u8(level_flags);
         buffer.write_i32(frame_index);

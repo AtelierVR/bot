@@ -7,13 +7,18 @@ use crate::connector::Connector;
 use crate::protocol::{RequestType, ResponseType};
 use crate::types::*;
 use anyhow::{anyhow, Result};
+use serde_json;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::{timeout, Duration};
 use tracing::{debug, info, warn};
-use serde_json;
+
+/// Callback invoked on a ServerConfig broadcast.
+type ServerConfigCallback = Arc<dyn Fn(ServerConfigResponse) + Send + Sync>;
+/// Callback invoked for every relay event.
+type EventCallback = Arc<dyn Fn(RelayEvent) + Send + Sync>;
 
 pub struct NoxRelay {
     connector: Arc<RwLock<Box<dyn Connector>>>,
@@ -27,9 +32,9 @@ pub struct NoxRelay {
     keep_alive_interval: Arc<Mutex<u64>>,
     last_ping: Arc<Mutex<Option<LatencyResponse>>>,
     /// Callback for ServerConfig broadcasts
-    server_config_callback: Arc<RwLock<Option<Arc<dyn Fn(ServerConfigResponse) + Send + Sync>>>>,
+    server_config_callback: Arc<RwLock<Option<ServerConfigCallback>>>,
     /// Generic callback for all relay events (Join, Leave, PlayerUpdate, etc.)
-    event_callback: Arc<RwLock<Option<Arc<dyn Fn(RelayEvent) + Send + Sync>>>>,
+    event_callback: Arc<RwLock<Option<EventCallback>>>,
 }
 
 impl NoxRelay {
@@ -237,16 +242,14 @@ impl NoxRelay {
                 None => break,
             };
 
-            match tokio::time::timeout(
-                Duration::from_millis(200),
-                quic.accept_uni_packet(),
-            )
-            .await
-            {
+            match tokio::time::timeout(Duration::from_millis(200), quic.accept_uni_packet()).await {
                 Ok(Ok((type_byte, payload))) => {
                     drop(connector);
                     if let Err(e) = self.process_push_packet(type_byte, &payload).await {
-                        warn!("Failed to process push packet (type=0x{:02X}): {}", type_byte, e);
+                        warn!(
+                            "Failed to process push packet (type=0x{:02X}): {}",
+                            type_byte, e
+                        );
                     }
                 }
                 Ok(Err(_e)) => {
@@ -321,19 +324,41 @@ impl NoxRelay {
                 let mut min_tps = None;
                 let mut max_tps = None;
                 let mut load_balancing_enabled = None;
-                if flags.contains(ServerConfigFlags::TPS) { tps = Some(buf.read_u8()?); }
-                if flags.contains(ServerConfigFlags::THRESHOLD) { threshold = Some(buf.read_f32()?); }
-                if flags.contains(ServerConfigFlags::CAPACITY) { capacity = Some(buf.read_u16()?); }
-                if flags.contains(ServerConfigFlags::FLAGS) { instance_flags = Some(buf.read_u32()?); }
-                if flags.contains(ServerConfigFlags::PASSWORD) { has_password = Some(buf.read_u8()? != 0); }
-                if flags.contains(ServerConfigFlags::MIN_TPS) { min_tps = Some(buf.read_u8()?); }
-                if flags.contains(ServerConfigFlags::MAX_TPS) { max_tps = Some(buf.read_u8()?); }
-                if flags.contains(ServerConfigFlags::LOAD_BALANCING) { load_balancing_enabled = Some(buf.read_u8()? != 0); }
+                if flags.contains(ServerConfigFlags::TPS) {
+                    tps = Some(buf.read_u8()?);
+                }
+                if flags.contains(ServerConfigFlags::THRESHOLD) {
+                    threshold = Some(buf.read_f32()?);
+                }
+                if flags.contains(ServerConfigFlags::CAPACITY) {
+                    capacity = Some(buf.read_u16()?);
+                }
+                if flags.contains(ServerConfigFlags::FLAGS) {
+                    instance_flags = Some(buf.read_u32()?);
+                }
+                if flags.contains(ServerConfigFlags::PASSWORD) {
+                    has_password = Some(buf.read_u8()? != 0);
+                }
+                if flags.contains(ServerConfigFlags::MIN_TPS) {
+                    min_tps = Some(buf.read_u8()?);
+                }
+                if flags.contains(ServerConfigFlags::MAX_TPS) {
+                    max_tps = Some(buf.read_u8()?);
+                }
+                if flags.contains(ServerConfigFlags::LOAD_BALANCING) {
+                    load_balancing_enabled = Some(buf.read_u8()? != 0);
+                }
                 let response = ServerConfigResponse {
                     instance_id: iid,
                     result: result_enum,
-                    tps, threshold, capacity, has_password, instance_flags,
-                    min_tps, max_tps, load_balancing_enabled,
+                    tps,
+                    threshold,
+                    capacity,
+                    has_password,
+                    instance_flags,
+                    min_tps,
+                    max_tps,
+                    load_balancing_enabled,
                 };
                 // Also trigger the existing server_config_callback
                 if let Some(cb) = self.server_config_callback.read().await.as_ref() {
@@ -393,7 +418,11 @@ impl NoxRelay {
                     };
                     RelayEvent::Transform(TransformEvent {
                         entity_id,
-                        transform: Transform { position, rotation, scale },
+                        transform: Transform {
+                            position,
+                            rotation,
+                            scale,
+                        },
                     })
                 } else {
                     // ByPath or unknown sub-type — skip
@@ -408,7 +437,11 @@ impl NoxRelay {
                 let player_id = buf.read_u16()?;
                 let avatar_id = buf.read_u32()? as u64;
                 let avatar_server = buf.read_string().unwrap_or_default();
-                RelayEvent::AvatarChanged(AvatarChangedEvent { player_id, avatar_id, avatar_server })
+                RelayEvent::AvatarChanged(AvatarChangedEvent {
+                    player_id,
+                    avatar_id,
+                    avatar_server,
+                })
             }
 
             // Custom Event (0x15): [iid:u8][name_hash:u64][data_len:u16][data][targets...]
@@ -426,7 +459,11 @@ impl NoxRelay {
                     return Ok(());
                 }
                 let data = buf.read_bytes(data_len)?;
-                RelayEvent::Event(CustomEvent { name, player_id: 0, data })
+                RelayEvent::Event(CustomEvent {
+                    name,
+                    player_id: 0,
+                    data,
+                })
             }
 
             // Stream / voice (0x14): broadcast Opus samples and hearing control.
@@ -711,7 +748,11 @@ impl NoxRelay {
         let resolve_resp = parse_auth_response(&resolve_resp_data).map_err(|e| anyhow!(e))?;
 
         match &resolve_resp {
-            AuthResponse::Success { user_id: _, address: _, display_name: _ } => {}
+            AuthResponse::Success {
+                user_id: _,
+                address: _,
+                display_name: _,
+            } => {}
             AuthResponse::Error { result, reason, .. } => {
                 warn!("Authentication failed: {:?} - {}", result, reason);
             }
