@@ -1,0 +1,24 @@
+services:
+  noxbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # Credentials: config.json + public_key.pem + private_key.pem
+      - $APPDATA/.nox:/nox:ro # for windows
+      # - $HOME/.local/share/nox:/nox:ro # for linux
+      # Opus files used by MODE=play
+      - ./audio:/app/audio:ro
+    environment:
+      INSTANCE: "${NOX_INSTANCE}"
+      MODE: "${NOX_MODE:-listen}"            # 'listen' or 'play'
+      LISTEN_ID: "${NOX_LISTEN_ID:-0}"       # bot index that listens (MODE=listen)
+      PLAY_FILE: "${NOX_PLAY_FILE:-}"        # e.g. /app/audio/slime.opus (MODE=play)
+      HUMAN: "${NOX_HUMAN:-1}"               # 1 = connect as a regular user
+      COUNT: "${NOX_COUNT:-1}"
+      MOVEMENT: "${NOX_MOVEMENT:-none}"
+      RUST_LOG: "${NOX_RUST_LOG:-info,noxbot=debug,noxrelay=info,nox_api=debug}"
+    # To hear --listen audio through the host speakers (Linux only), uncomment:
+    # devices:
+    #   - /dev/snd:/dev/snd
+    # restart: unless-stopped
