@@ -6,7 +6,7 @@ services:
     volumes:
       # Credentials: config.json + public_key.pem + private_key.pem
       - $APPDATA/.nox:/nox:ro # for windows
-      # - $HOME/.local/share/nox:/nox:ro # for linux
+      # - $HOME/.config/nox:/nox:ro # for linux
       # Opus files used by MODE=play
       - ./audio:/app/audio:ro
     environment:

@@ -98,7 +98,7 @@ The folder location depends on your OS:
 | OS      | `.nox` folder                                                    |
 | ------- | ---------------------------------------------------------------- |
 | Windows | `%APPDATA%\.nox` → `C:\Users\<user>\AppData\Roaming\.nox`        |
-| Linux   | `~/.local/share/.nox`                                            |
+| Linux   | `~/.config/nox`                                                 |
 
 ### 3. Run on Windows
 
@@ -120,13 +120,13 @@ volumes:
 ### 4. Run on Linux
 
 1. Make sure Docker and the Compose plugin are installed.
-2. Make sure your credentials are in `~/.local/share/.nox`.
+2. Make sure your credentials are in `~/.config/nox`.
 3. Edit `docker-compose.yml`: comment the Windows line and uncomment the Linux line:
 
 ```yaml
 volumes:
   # - $APPDATA/.nox:/nox:ro          # windows
-  - $HOME/.local/share/.nox:/nox:ro # linux
+  - $HOME/.config/nox:/nox:ro # linux
 ```
 
 4. Start the bot:

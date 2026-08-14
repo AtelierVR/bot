@@ -37,13 +37,18 @@ impl NoxCredentials {
         let base_dir = format!("{}/Library/Application Support", home);
 
         #[cfg(target_os = "linux")]
-        let base_dir = format!("{}/.local/share", home);
+        let base_dir = format!("{}/.config", home);
 
         #[cfg(target_os = "windows")]
         let base_dir =
             std::env::var("APPDATA").unwrap_or_else(|_| format!("{}\\AppData\\Roaming", home));
 
-        PathBuf::from(base_dir).join(".nox")
+        #[cfg(target_os = "linux")]
+        let folder_name = "nox";
+        #[cfg(not(target_os = "linux"))]
+        let folder_name = ".nox";
+
+        PathBuf::from(base_dir).join(folder_name)
     }
 
     /// Obtient le chemin du fichier de configuration

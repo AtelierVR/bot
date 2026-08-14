@@ -39,7 +39,7 @@ struct Args {
     #[arg(short, long)]
     instance: String,
 
-    /// Custom config directory (default: ~/.local/share/.nox or %APPDATA%/.nox)
+    /// Custom config directory (default: ~/.config/nox or %APPDATA%/.nox)
     #[arg(short, long)]
     config_dir: Option<PathBuf>,
 
