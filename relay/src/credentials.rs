@@ -43,10 +43,10 @@ impl NoxCredentials {
         let base_dir =
             std::env::var("APPDATA").unwrap_or_else(|_| format!("{}\\AppData\\Roaming", home));
 
-        #[cfg(target_os = "linux")]
-        let folder_name = "nox";
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
         let folder_name = ".nox";
+        #[cfg(not(target_os = "windows"))]
+        let folder_name = "nox";
 
         PathBuf::from(base_dir).join(folder_name)
     }
@@ -112,6 +112,6 @@ mod tests {
     #[test]
     fn test_nox_folder_path() {
         let path = NoxCredentials::nox_folder(None);
-        assert!(path.to_str().unwrap().contains(".nox"));
+        assert!(path.to_str().unwrap().contains("nox"));
     }
 }
