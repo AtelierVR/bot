@@ -310,6 +310,7 @@ pub enum RelayEvent {
     Quit(QuitEvent),
     Event(CustomEvent),
     Transform(TransformEvent),
+    Stream(StreamEvent),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -370,6 +371,25 @@ pub struct CustomEvent {
 pub struct TransformEvent {
     pub entity_id: u16,
     pub transform: Transform,
+}
+
+/// Stream packet (0x14) broadcast by the relay: voice samples and hearing control.
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamEvent {
+    /// Sub-type: 0x00 = Sample (Opus audio), 0x01 = Control (hearing permission).
+    pub sub_type: u8,
+    // ── Sample fields ──
+    pub player_id: u16,
+    pub channel_id: u32,
+    pub level_flags: u8,
+    pub group_id: Option<u16>,
+    pub frame_index: i32,
+    pub timestamp: f64,
+    pub sample: Vec<u8>,
+    // ── Control fields ──
+    pub listener_id: u16,
+    pub speaker_id: u16,
+    pub control_flags: u8,
 }
 
 // Utility function to compute CRC64

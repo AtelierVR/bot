@@ -201,7 +201,7 @@ impl Nox {
         }
     }
 
-    pub async fn get_instance_by_id(&self, id: u32) -> NoxResponse<Instance> {
+    pub async fn get_instance_by_id(&self, id: &str) -> NoxResponse<Instance> {
         let url = format!(
             "{}/api/instances/{}",
             self.base_url.trim_end_matches('/'),

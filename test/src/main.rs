@@ -3,7 +3,7 @@ use clap::Parser;
 use noxapi::Nox;
 use noxrelay::{
     AvatarChangeRequest, EnterFlags, EnterRequest, HandshakeRequest, NoxRelay, QuicConnector,
-    RelayInstance, SessionRequest, TravelingAction, TravelingRequest,
+    RelayEvent, RelayInstance, SessionRequest, TravelingAction, TravelingRequest,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,13 +55,20 @@ struct Args {
     #[arg(long, default_value = "1000")]
     delay: u64,
 
-    /// Print all received relay packets as JSON (uses serde_json)
-    #[arg(long, default_value = "false")]
-    listen: bool,
+    /// Listen for incoming voice streams on a specific bot (by index) and play
+    /// received Opus audio through the speakers. Defaults to bot 0 when no id is
+    /// given (`--listen`). Use `--listen 5` to make bot #5 the listener.
+    /// Non-voice relay events are still printed as JSON.
+    #[arg(long, num_args = 0..=1, default_missing_value = "0")]
+    listen: Option<usize>,
 
-    /// Movement mode: random, circular, rtp, square, cross, target
+    /// Movement mode: random, circular, rtp, square, cross, forward, none, target
     #[arg(long, default_value = "random")]
     movement: String,
+
+    /// Override movement speed (units/second). Applied to the speed field of the chosen movement.
+    #[arg(long)]
+    speed: Option<f32>,
 
     /// Connect as a regular user instead of a bot (skips the AUTHORIZE_BOT instance check)
     #[arg(long, default_value = "false")]
@@ -96,9 +103,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let instance_id: u32 = instance_parts[0]
-        .parse()
-        .context("Failed to parse instance ID")?;
+    let instance_id = instance_parts[0];
     let server = instance_parts[1];
 
     info!("Target instance: {} (server: {})", instance_id, server);
@@ -196,10 +201,12 @@ async fn main() -> Result<()> {
         config_dir: Option<PathBuf>,
         nox: Nox,
         token: Option<String>,
-        listen: bool,
+        listen: Option<usize>,
         movement: String,
+        speed_override: Option<f32>,
         human: bool,
         audio_file: Option<Vec<Vec<u8>>>,
+        voice_playback: Option<Arc<audio::VoicePlayback>>,
     }
 
     let (tx, rx) = mpsc::channel::<BotCommand>(args.count);
@@ -236,8 +243,10 @@ async fn main() -> Result<()> {
                             cmd.token,
                             cmd.listen,
                             &cmd.movement,
+                            cmd.speed_override,
                             cmd.human,
                             cmd.audio_file,
+                            cmd.voice_playback,
                             shutdown_flag.clone(),
                             active_bots_ref.clone(),
                         )
@@ -263,7 +272,24 @@ async fn main() -> Result<()> {
     let bot_delay = args.delay;
     let bot_listen = args.listen;
     let bot_movement = args.movement.clone();
+    let bot_speed = args.speed;
     let bot_human = args.human;
+
+    // Set up voice playback when --listen is active (decodes and plays received Opus audio)
+    let voice_playback: Option<Arc<audio::VoicePlayback>> = if let Some(listener) = bot_listen {
+        match audio::VoicePlayback::start() {
+            Ok(player) => {
+                info!("Voice playback enabled: bot #{listener} will listen for voice");
+                Some(player)
+            }
+            Err(e) => {
+                warn!("Failed to start voice playback: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Read and parse audio file if --play is specified
     let audio_packets: Option<Vec<Vec<u8>>> = match &args.play {
@@ -302,8 +328,10 @@ async fn main() -> Result<()> {
                 token: api_token.clone(),
                 listen: bot_listen,
                 movement: bot_movement.clone(),
+                speed_override: bot_speed,
                 human: bot_human,
                 audio_file: audio_packets.clone(),
+                voice_playback: voice_playback.clone(),
             };
 
             if tx_clone.send(cmd).await.is_err() {
@@ -372,10 +400,12 @@ async fn create_bot(
     config_dir: Option<PathBuf>,
     nox: Nox,
     token: Option<String>,
-    listen: bool,
+    listen: Option<usize>,
     movement_name: &str,
+    speed_override: Option<f32>,
     human: bool,
     audio_file: Option<Vec<Vec<u8>>>,
+    voice_playback: Option<Arc<audio::VoicePlayback>>,
     shutdown: Arc<AtomicBool>,
     active_bots: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 ) -> Result<()> {
@@ -563,8 +593,8 @@ async fn create_bot(
     }
 
     // Select movement
-    let movement = movements::get_movement(movement_name);
-    info!("[Bot {}] Movement: {}", index, movement.name());
+    let movement = movements::get_movement(movement_name, speed_override);
+    info!("[Bot {}] Movement: {} (speed: {})", index, movement.name(), movement.speed());
     let mut movement_state = movement.initialize(index);
     movement_state.player_id = bot_player_id;
 
@@ -610,10 +640,24 @@ async fn create_bot(
     // This is required so the connection doesn't stall.
     relay.start_push_listener();
 
-    // If --listen is active, register a callback that prints every received event as JSON
-    if listen {
+    // If --listen is active, register a callback that plays incoming voice frames
+    // on the selected bot (by index) and prints every other received event as JSON.
+    if listen == Some(index) {
         let bot_index = index;
+        let playback = voice_playback.clone();
         relay.set_event_callback(move |event| {
+            if let RelayEvent::Stream(stream) = &event {
+                if stream.sub_type == 0 {
+                    if let Some(ref player) = playback {
+                        player.play_frame(stream.player_id, stream.frame_index, &stream.sample);
+                        debug!(
+                            "[Bot {}] Voice frame: speaker={} frame={} bytes={}",
+                            bot_index, stream.player_id, stream.frame_index, stream.sample.len()
+                        );
+                    }
+                    return;
+                }
+            }
             match serde_json::to_string(&event) {
                 Ok(json) => info!("[Bot {}] RX {}", bot_index, json),
                 Err(e) => warn!("[Bot {}] Failed to serialize event: {}", bot_index, e),

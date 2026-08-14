@@ -413,12 +413,81 @@ impl NoxRelay {
 
             // Custom Event (0x15): [iid:u8][name_hash:u64][data_len:u16][data][targets...]
             t if t == ResponseType::Event as u8 => {
+                // Minimum: iid(1) + name_hash(8) + data_len(2) = 11 bytes
+                if payload.len() < 11 {
+                    return Ok(());
+                }
                 let mut buf = Buffer::from_vec(payload.to_vec());
                 let _iid = buf.read_u8()?;
                 let name = buf.read_u64()?;
                 let data_len = buf.read_u16()? as usize;
+                // Guard against bogus data_len exceeding remaining bytes
+                if buf.remaining() < data_len {
+                    return Ok(());
+                }
                 let data = buf.read_bytes(data_len)?;
                 RelayEvent::Event(CustomEvent { name, player_id: 0, data })
+            }
+
+            // Stream / voice (0x14): broadcast Opus samples and hearing control.
+            // Sample: [iid:u8][0x00][player_id:u16][channel_id:u32][level_flags:u8]
+            //         [?group_id:u16][frame_index:i32][timestamp:f64][sample:bytes]
+            // Control:[iid:u8][0x01][listener_id:u16][speaker_id:u16][control_flags:u8]
+            t if t == ResponseType::Stream as u8 => {
+                let mut buf = Buffer::from_vec(payload.to_vec());
+                let _iid = buf.read_u8()?;
+                let sub_type = buf.read_u8()?;
+
+                match sub_type {
+                    // Sample (Opus audio)
+                    0x00 => {
+                        let player_id = buf.read_u16()?;
+                        let channel_id = buf.read_u32()?;
+                        let level_flags = buf.read_u8()?;
+                        // Bit 2 (0x04) = HasGroup
+                        let group_id = if level_flags & 0x04 != 0 {
+                            Some(buf.read_u16()?)
+                        } else {
+                            None
+                        };
+                        let frame_index = buf.read_i32()?;
+                        let timestamp = buf.read_f64()?;
+                        let sample = buf.read_bytes(buf.remaining())?;
+                        RelayEvent::Stream(StreamEvent {
+                            sub_type,
+                            player_id,
+                            channel_id,
+                            level_flags,
+                            group_id,
+                            frame_index,
+                            timestamp,
+                            sample,
+                            listener_id: 0,
+                            speaker_id: 0,
+                            control_flags: 0,
+                        })
+                    }
+                    // Control (hearing permission)
+                    0x01 => {
+                        let listener_id = buf.read_u16()?;
+                        let speaker_id = buf.read_u16()?;
+                        let control_flags = buf.read_u8()?;
+                        RelayEvent::Stream(StreamEvent {
+                            sub_type,
+                            player_id: 0,
+                            channel_id: 0,
+                            level_flags: 0,
+                            group_id: None,
+                            frame_index: 0,
+                            timestamp: 0.0,
+                            sample: Vec::new(),
+                            listener_id,
+                            speaker_id,
+                            control_flags,
+                        })
+                    }
+                    _ => return Ok(()),
+                }
             }
 
             // Unknown or unhandled packet type — ignore

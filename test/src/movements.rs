@@ -7,6 +7,8 @@ pub trait Movement: Send + Sync {
     fn name(&self) -> &str;
     #[allow(dead_code)]
     fn description(&self) -> &str;
+    /// Current speed value (useful for logging, after overrides)
+    fn speed(&self) -> f32;
     fn initialize(&self, index: usize) -> MovementState;
     async fn update(&self, state: &mut MovementState, dt: f32, instance: &RelayInstance);
 }
@@ -92,6 +94,10 @@ impl Movement for CircularMovement {
         "Mouvement circulaire"
     }
 
+    fn speed(&self) -> f32 {
+        self.speed
+    }
+
     fn initialize(&self, index: usize) -> MovementState {
         let offset = index as f32 * 2.0;
         MovementState::new(offset, 0.0, 0.0, 0)
@@ -138,6 +144,10 @@ impl Movement for RandomTeleportMovement {
 
     fn description(&self) -> &str {
         "Téléportation aléatoire"
+    }
+
+    fn speed(&self) -> f32 {
+        0.0 // RTP has no speed field, jumps are instantaneous
     }
 
     fn initialize(&self, index: usize) -> MovementState {
@@ -193,6 +203,10 @@ impl Movement for SquareMovement {
         "Mouvement en carré"
     }
 
+    fn speed(&self) -> f32 {
+        self.speed
+    }
+
     fn initialize(&self, index: usize) -> MovementState {
         MovementState::new(index as f32, 0.0, 0.0, 0)
     }
@@ -245,6 +259,85 @@ impl Movement for SquareMovement {
     }
 }
 
+/// Bot stands still — no movement at all.
+pub struct NoneMovement;
+
+#[async_trait]
+impl Movement for NoneMovement {
+    fn name(&self) -> &str {
+        "none"
+    }
+
+    fn description(&self) -> &str {
+        "Aucun mouvement (statique)"
+    }
+
+    fn speed(&self) -> f32 {
+        0.0
+    }
+
+    fn initialize(&self, index: usize) -> MovementState {
+        MovementState::new(index as f32 * 0.1, 0.0, 0.0, 0)
+    }
+
+    async fn update(&self, _state: &mut MovementState, _dt: f32, _instance: &RelayInstance) {
+        // No movement
+    }
+}
+
+/// Walks forward along Z: 0 → arm, teleports back to 0, repeats.
+pub struct ForwardMovement {
+    /// Distance to walk before teleporting back
+    pub arm: f32,
+    /// Walk speed in units/second
+    pub speed: f32,
+    pub max_speed: f32,
+}
+
+#[async_trait]
+impl Movement for ForwardMovement {
+    fn name(&self) -> &str {
+        "forward"
+    }
+
+    fn description(&self) -> &str {
+        "Marche en avant sur Z (0 → arm, tp à 0)"
+    }
+
+    fn speed(&self) -> f32 {
+        self.speed
+    }
+
+    fn initialize(&self, index: usize) -> MovementState {
+        MovementState::new(index as f32 * 0.1, 0.0, 0.0, 0)
+    }
+
+    async fn update(&self, state: &mut MovementState, dt: f32, instance: &RelayInstance) {
+        let dt_s = dt / 1000.0;
+
+        // Walk forward along Z until arm, then teleport back to 0
+        state.position.z += self.speed * dt_s;
+        if state.position.z >= self.arm {
+            state.position.z = 0.0;
+        }
+
+        let _ = instance
+            .transform(TransformRequest {
+                player_id: state.player_id,
+                rig_id: 0,
+                transform: Transform {
+                    position: Some(state.position.clone()),
+                    rotation: Some(state.rotation.clone()),
+                    scale: None,
+                },
+                transform_type: TransformType::EntityPart,
+            })
+            .await;
+
+        send_velocity_properties(0.0, self.speed, self.max_speed, state.player_id, instance).await;
+    }
+}
+
 pub struct CrossMovement {
     /// Length of each arm from the center
     pub arm: f32,
@@ -261,6 +354,10 @@ impl Movement for CrossMovement {
 
     fn description(&self) -> &str {
         "Mouvement en croix (centre ↔ chaque côté)"
+    }
+
+    fn speed(&self) -> f32 {
+        self.speed
     }
 
     fn initialize(&self, index: usize) -> MovementState {
@@ -323,6 +420,10 @@ impl Movement for TargetMovement {
         "Marche vers un point aléatoire, puis en choisit un nouveau"
     }
 
+    fn speed(&self) -> f32 {
+        self.speed
+    }
+
     fn initialize(&self, index: usize) -> MovementState {
         let mut state = MovementState::new(index as f32 * 0.1, 0.0, 0.0, 0);
         // Pick an initial random target
@@ -374,11 +475,12 @@ impl Movement for TargetMovement {
     }
 }
 
-pub fn get_movements() -> Vec<Box<dyn Movement>> {
+pub fn get_movements(speed_override: Option<f32>) -> Vec<Box<dyn Movement>> {
     vec![
+        Box::new(NoneMovement),
         Box::new(CircularMovement {
             radius: 5.0,
-            speed: 1.0,
+            speed: speed_override.unwrap_or(1.0),
             max_speed: 10.0,
         }),
         Box::new(RandomTeleportMovement {
@@ -387,41 +489,80 @@ pub fn get_movements() -> Vec<Box<dyn Movement>> {
         }),
         Box::new(SquareMovement {
             size: 10.0,
-            speed: 0.5,
+            speed: speed_override.unwrap_or(0.5),
             max_speed: 10.0,
         }),
         Box::new(CrossMovement {
             arm: 8.0,
-            speed: 3.0,
+            speed: speed_override.unwrap_or(3.0),
+            max_speed: 10.0,
+        }),
+        Box::new(ForwardMovement {
+            arm: 8.0,
+            speed: speed_override.unwrap_or(2.0),
             max_speed: 10.0,
         }),
         Box::new(TargetMovement {
             range: 15.0,
-            speed: 3.0,
+            speed: speed_override.unwrap_or(3.0),
             max_speed: 10.0,
             threshold: 0.15,
         }),
     ]
 }
 
-pub fn get_movement_by_name(name: &str) -> Option<Box<dyn Movement>> {
-    get_movements().into_iter().find(|m| m.name() == name)
+pub fn get_movement_by_name(name: &str, speed_override: Option<f32>) -> Option<Box<dyn Movement>> {
+    let m: Box<dyn Movement> = match name {
+        "none" => Box::new(NoneMovement),
+        "circular" => Box::new(CircularMovement {
+            radius: 5.0,
+            speed: speed_override.unwrap_or(1.0),
+            max_speed: 10.0,
+        }),
+        "rtp" => Box::new(RandomTeleportMovement {
+            range: 20.0,
+            max_speed: 10.0,
+        }),
+        "square" => Box::new(SquareMovement {
+            size: 10.0,
+            speed: speed_override.unwrap_or(0.5),
+            max_speed: 10.0,
+        }),
+        "cross" => Box::new(CrossMovement {
+            arm: 8.0,
+            speed: speed_override.unwrap_or(3.0),
+            max_speed: 10.0,
+        }),
+        "forward" => Box::new(ForwardMovement {
+            arm: 8.0,
+            speed: speed_override.unwrap_or(2.0),
+            max_speed: 10.0,
+        }),
+        "target" => Box::new(TargetMovement {
+            range: 15.0,
+            speed: speed_override.unwrap_or(3.0),
+            max_speed: 10.0,
+            threshold: 0.15,
+        }),
+        _ => return None,
+    };
+    Some(m)
 }
 
-pub fn get_random_movement() -> Box<dyn Movement> {
-    let movements = get_movements();
-    let index = rand::random::<usize>() % movements.len();
-    movements.into_iter().nth(index).unwrap()
+pub fn get_random_movement(speed_override: Option<f32>) -> Box<dyn Movement> {
+    let names = ["circular", "rtp", "square", "cross", "forward", "target"];
+    let index = rand::random::<usize>() % names.len();
+    get_movement_by_name(names[index], speed_override).unwrap()
 }
 
-pub fn get_movement(name: &str) -> Box<dyn Movement> {
+pub fn get_movement(name: &str, speed_override: Option<f32>) -> Box<dyn Movement> {
     if name == "random" {
-        return get_random_movement();
+        return get_random_movement(speed_override);
     }
-    match get_movement_by_name(name) {
+    match get_movement_by_name(name, speed_override) {
         Some(m) => m,
         None => {
-            let all = get_movements();
+            let all = get_movements(None);
             let names: Vec<&str> = all.iter().map(|m| m.name()).collect();
             panic!("Unknown movement '{}'. Available: random, {}", name, names.join(", "));
         }

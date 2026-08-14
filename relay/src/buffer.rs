@@ -113,6 +113,26 @@ impl Buffer {
         Ok(self.data.get_i64())
     }
 
+    pub fn read_i32(&mut self) -> io::Result<i32> {
+        if self.data.remaining() < 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough data",
+            ));
+        }
+        Ok(self.data.get_i32())
+    }
+
+    pub fn read_f64(&mut self) -> io::Result<f64> {
+        if self.data.remaining() < 8 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough data",
+            ));
+        }
+        Ok(self.data.get_f64())
+    }
+
     pub fn read_f32(&mut self) -> io::Result<f32> {
         if self.data.remaining() < 4 {
             return Err(io::Error::new(
