@@ -9,6 +9,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # CMake 4.x removed compatibility with projects declaring cmake_minimum_required
+  # below 3.5 (the Opus source bundled by audiopus_sys does). Allow configuring anyway.
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
 jobs:
   build:

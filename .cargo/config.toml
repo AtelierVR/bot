@@ -1,0 +1,5 @@
+# CMake 4.x removed compatibility with projects declaring cmake_minimum_required < 3.5.
+# The bundled Opus CMakeLists.txt (built by audiopus_sys) declares an older minimum,
+# so we allow configuration against policy 3.5 to keep the build working.
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
