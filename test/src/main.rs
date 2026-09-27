@@ -30,6 +30,41 @@ fn get_platform() -> &'static str {
     return "unknown";
 }
 
+/// Split a Nox identifier ("<type>:<id>?<query>@<server>") into its numeric id and server.
+///
+/// The user profile returned by the API stores the *full* identifier, e.g. `a:42@hactazia.fr`
+/// or `a:42?v=12@hactazia.fr` — the leading `<type>:` prefix and the optional query must be
+/// stripped before the id can be parsed as a number, otherwise the avatar is never announced
+/// and every client falls back to its error avatar.
+fn parse_avatar_identifier(identifier: &str) -> Option<(u32, String, u16)> {
+    let (body, server) = match identifier.rsplit_once('@') {
+        Some((body, server)) if !server.is_empty() => (body, server.to_string()),
+        _ => (identifier, "hactazia.fr".to_string()),
+    };
+
+    let (ids, version) = match body.split_once('?') {
+        Some((ids, query)) => (ids, parse_identifier_version(query)),
+        None => (body, u16::MAX),
+    };
+
+    let id = match ids.rsplit_once(':') {
+        Some((_, id)) => id,
+        None => ids,
+    };
+
+    id.parse::<u32>().ok().map(|id| (id, server, version))
+}
+
+/// Reads the `v` (version) parameter of a Nox identifier query string; `u16::MAX` means "latest".
+fn parse_identifier_version(query: &str) -> u16 {
+    query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(key, _)| *key == "v")
+        .and_then(|(_, value)| value.parse::<u16>().ok())
+        .unwrap_or(u16::MAX)
+}
+
 /// Nox bot load testing tool
 #[derive(Parser, Debug)]
 #[command(name = "noxbot")]
@@ -587,20 +622,17 @@ async fn create_bot(
     // Now send avatar change (player is valid after Ready)
     let user_avatar = avatar_future.await;
     if let Some(ref avatar_str) = user_avatar {
-        let (avatar_id_str, avatar_srv) = match avatar_str.split_once('@') {
-            Some((id, srv)) => (id, srv.to_string()),
-            None => (avatar_str.as_str(), "hactazia.fr".to_string()),
-        };
-        if let Ok(avatar_id) = avatar_id_str.parse::<u32>() {
-            match instance
-                .change_avatar(AvatarChangeRequest::new(
-                    bot_player_id,
-                    avatar_id,
-                    avatar_srv.clone(),
-                ))
-                .await
-            {
-                Ok(_) => info!("[Bot {}] Avatar set to {}@{}", index, avatar_id, avatar_srv),
+        // The API returns the full identifier ("a:42@hactazia.fr"), not a bare numeric id.
+        if let Some((avatar_id, avatar_srv, avatar_version)) = parse_avatar_identifier(avatar_str) {
+            let mut request =
+                AvatarChangeRequest::new(bot_player_id, avatar_id, avatar_srv.clone());
+            request.version = avatar_version;
+
+            match instance.change_avatar(request).await {
+                Ok(_) => info!(
+                    "[Bot {}] Avatar set to a:{}@{} (version {})",
+                    index, avatar_id, avatar_srv, avatar_version
+                ),
                 Err(e) => warn!("[Bot {}] Failed to set avatar: {}", index, e),
             }
         } else {
