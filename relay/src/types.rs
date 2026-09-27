@@ -93,6 +93,8 @@ pub struct Transform {
 #[derive(Debug, Clone)]
 pub struct HandshakeRequest {
     pub protocol: u16,
+    pub address: String,
+    pub port: u16,
     pub engine: String,
     pub platform: String,
 }

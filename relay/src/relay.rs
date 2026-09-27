@@ -655,6 +655,8 @@ impl NoxRelay {
     pub async fn handshake(&self, request: HandshakeRequest) -> Result<HandshakeResponse> {
         let mut buffer = Buffer::new();
         buffer.write_u16(request.protocol);
+        buffer.write_string(&request.address);
+        buffer.write_u16(request.port);
         buffer.write_string(&request.engine);
         buffer.write_string(&request.platform);
 

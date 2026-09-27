@@ -420,7 +420,7 @@ async fn create_bot(
         index, host, port
     );
 
-    let connector = Box::new(QuicConnector::new(host, port));
+    let connector = Box::new(QuicConnector::new(host.clone(), port));
     let relay = Arc::new(NoxRelay::new(connector));
 
     // Connect
@@ -432,7 +432,9 @@ async fn create_bot(
         handshake_attempt += 1;
         match relay
             .handshake(HandshakeRequest {
-                protocol: 0x0001,
+                protocol: 0x0002,
+                address: host.to_string(),
+                port,
                 engine: "noxbot".to_string(),
                 platform: get_platform().to_string(),
             })
