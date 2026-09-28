@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use url::Url;
 
 mod audio;
@@ -711,8 +711,10 @@ async fn create_bot(
                     if stream.sub_type == 0 {
                         if let Some(ref player) = playback {
                             player.play_frame(stream.player_id, stream.frame_index, &stream.sample);
-                            debug!(
-                                "[Bot {}] Voice frame: speaker={} frame={} bytes={}",
+                            // Arrival order, not playout order — and one line per frame, so this is
+                            // only worth it at trace level.
+                            trace!(
+                                "[Bot {}] Voice RX: speaker={} frame={} bytes={}",
                                 bot_index,
                                 stream.player_id,
                                 stream.frame_index,
