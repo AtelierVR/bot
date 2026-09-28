@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tracing::debug;
 
 /// Parse an Ogg Opus file and extract individual Opus packets.
 /// Returns packets where each packet is a valid Opus frame ready to send.
@@ -36,6 +37,10 @@ const FRAME_SAMPLES: usize = 960;
 /// playing frames as they arrive starves the output as soon as one is late.
 const TARGET_LATENCY: Duration = Duration::from_millis(60);
 
+/// Frames the jitter buffer may hold: `TARGET_LATENCY` worth (60 ms / 20 ms). A deeper backlog is
+/// latency, not jitter, so it is dropped instead of being played late.
+const CUSHION_FRAMES: i32 = 3;
+
 /// Granularity of the playout loop.
 const TICK_INTERVAL: Duration = Duration::from_millis(5);
 
@@ -51,8 +56,13 @@ const MAX_CONCEALED_FRAMES: i32 = 3;
 /// instead of concealed to keep the playout in sync with real time.
 const CONCEAL_MAX_SILENCE: Duration = Duration::from_millis(150);
 
-/// Decoded PCM chunks queued for the audio thread (20 ms each => 500 ms slack).
-const PCM_QUEUE: usize = 25;
+/// Frame period of the stream: one Opus frame of `FRAME_SAMPLES` at 48 kHz.
+const FRAME_PERIOD: Duration = Duration::from_millis(20);
+
+/// Decoded PCM chunks queued for the audio thread (20 ms each). The playout paces itself on the
+/// clock, so this only has to absorb a device hiccup: the queue is drained at the device rate, so a
+/// deeper one would let a single stall pin the latency for good.
+const PCM_QUEUE: usize = 4;
 
 /// A `rodio` source that plays decoded PCM chunks arriving over a channel.
 ///
@@ -130,6 +140,8 @@ struct StreamState {
     last_arrival: Option<Instant>,
     /// Whether the playout head is locked on the sender's frame indices.
     primed: bool,
+    /// When the next slot of the timeline is due; the playout keeps real time from here.
+    next_due: Option<Instant>,
 }
 
 impl StreamState {
@@ -142,6 +154,7 @@ impl StreamState {
             priming_since: None,
             last_arrival: None,
             primed: false,
+            next_due: None,
         }
     }
 
@@ -177,8 +190,13 @@ impl StreamState {
         }
     }
 
-    /// Emits every frame that is playable by now for this speaker.
-    fn emit(&mut self, pcm_tx: &mpsc::SyncSender<Vec<f32>>) {
+    /// Emits the frames this speaker owes by now, at the stream's real-time pace.
+    ///
+    /// The playout advances one slot per [`FRAME_PERIOD`] of wall clock, whatever the arrival pattern
+    /// is, so the jitter buffer absorbs the network and the output queue never has to. Emitting every
+    /// buffered frame as soon as it is complete (the previous behaviour) turned any burst into latency:
+    /// the queue is drained at the device rate, so it only ever grew back to its target depth.
+    fn emit(&mut self, player_id: u16, pcm_tx: &mpsc::SyncSender<Vec<f32>>) {
         let now = Instant::now();
 
         // Idle speaker: forget the timeline so the next burst re-primes cleanly
@@ -190,15 +208,16 @@ impl StreamState {
         {
             self.primed = false;
             self.priming_since = None;
+            self.next_due = None;
             return;
         }
 
-        if self.pending.is_empty() {
+        if self.pending.is_empty() && !self.primed {
             return;
         }
 
-        // Jitter priming: wait until the buffer holds TARGET_LATENCY worth of
-        // frames before locking the playout head, so a late arrival cannot starve it.
+        // Jitter priming: wait until the buffer had TARGET_LATENCY to fill, so a late arrival cannot
+        // starve the playout.
         if !self.primed {
             let waited = self
                 .priming_since
@@ -207,47 +226,83 @@ impl StreamState {
                 return;
             }
 
-            self.next_index = *self.pending.keys().next().expect("pending is not empty");
+            let Some(&first) = self.pending.keys().next() else {
+                return;
+            };
+
+            self.next_index = first;
             self.primed = true;
+            self.next_due = Some(now);
         }
 
-        loop {
+        // A backlog deeper than the cushion is latency, not jitter: keep the cushion by dropping the
+        // oldest frames, so a burst cannot pin the playout behind real time for the whole stream.
+        if let Some(&newest) = self.pending.keys().next_back() {
+            let excess = newest - self.next_index - CUSHION_FRAMES;
+            if excess > 0 {
+                debug!(
+                    "[playout] speaker={} dropped {} frames (buffer deeper than the cushion)",
+                    player_id, excess
+                );
+                self.next_index = newest - CUSHION_FRAMES;
+            }
+        }
+
+        let mut due = self.next_due.unwrap_or(now);
+
+        while due <= now {
             // In-order frame: decode and hand it to the audio thread.
             if let Some(payload) = self.pending.remove(&self.next_index) {
                 let pcm = self.decode(&payload);
                 let _ = pcm_tx.try_send(pcm);
                 self.next_index += 1;
+                due += FRAME_PERIOD;
                 continue;
             }
 
             let Some(&first) = self.pending.keys().next() else {
+                // Nothing buffered left: the stream is late. Drop the debt instead of accumulating it,
+                // so the playout resumes in real time when frames come back.
+                due = now + FRAME_PERIOD;
                 break;
             };
 
-            if first > self.next_index {
-                let gap = first - self.next_index;
-                let fresh = self
-                    .last_arrival
-                    .map_or(false, |last| now.duration_since(last) <= CONCEAL_MAX_SILENCE);
-
-                if gap <= MAX_CONCEALED_FRAMES && fresh {
-                    // Lost packets in the middle of an active stream: let Opus
-                    // conceal them instead of cutting a hole in the audio.
-                    let pcm = self.conceal();
-                    let _ = pcm_tx.try_send(pcm);
-                    self.next_index += 1;
-                    continue;
-                }
-
-                // Intentional silence (the sender stops streaming through its
-                // gate) or a long outage: jump to the next available frame.
-                self.next_index = first;
+            // A frame behind the playout head (already played, or too late to be used) is unusable.
+            if first < self.next_index {
+                self.pending.pop_first();
                 continue;
             }
 
-            // Late frame behind the playout head: unusable, drop it.
-            self.pending.pop_first();
+            let gap = first - self.next_index;
+            let fresh = self.last_arrival.map_or(false, |last| {
+                now.duration_since(last) <= CONCEAL_MAX_SILENCE
+            });
+
+            if gap <= MAX_CONCEALED_FRAMES && fresh {
+                // Lost packets in the middle of an active stream: let Opus conceal them instead of
+                // cutting a hole in the audio.
+                let pcm = self.conceal();
+                debug!(
+                    "[playout] speaker={} frame={} concealed",
+                    player_id, self.next_index
+                );
+                let _ = pcm_tx.try_send(pcm);
+                self.next_index += 1;
+                due += FRAME_PERIOD;
+                continue;
+            }
+
+            // Sender's gate or a long outage: skip the hole and re-anchor on the frame we hold, so a
+            // backlog resyncs instead of being played as a catch-up burst.
+            debug!(
+                "[playout] speaker={} frame={} skipped {} frames (resync)",
+                player_id, self.next_index, gap
+            );
+            self.next_index = first;
+            due = now;
         }
+
+        self.next_due = Some(due);
     }
 }
 
@@ -301,8 +356,8 @@ impl VoicePlayback {
                 std::thread::sleep(TICK_INTERVAL);
                 match playout_streams.lock() {
                     Ok(mut streams) => {
-                        for state in streams.values_mut() {
-                            state.emit(&playout_tx);
+                        for (player_id, state) in streams.iter_mut() {
+                            state.emit(*player_id, &playout_tx);
                         }
                     }
                     // A poisoned lock only means one frame was skipped.
@@ -311,7 +366,10 @@ impl VoicePlayback {
             })
             .map_err(|e| format!("failed to spawn playout thread: {e}"))?;
 
-        Ok(Arc::new(Self { _pcm_tx: pcm_tx, streams }))
+        Ok(Arc::new(Self {
+            _pcm_tx: pcm_tx,
+            streams,
+        }))
     }
 
     /// Buffer a single voice frame for `player_id`.
@@ -330,6 +388,12 @@ impl VoicePlayback {
 
         let now = Instant::now();
         let state = streams.entry(player_id).or_insert_with(StreamState::new);
+
+        // A frame behind the playout head (late, or a duplicate of one already played) is unusable,
+        // and keeping it would keep the buffer from ever looking idle.
+        if state.primed && frame_index < state.next_index {
+            return;
+        }
 
         state.last_arrival = Some(now);
         state.priming_since.get_or_insert(now);
